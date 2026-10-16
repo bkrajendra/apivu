@@ -27,6 +27,8 @@ jobs:
         with:
           name: apivu-chrome-extension
           path: .output/*.zip
+          # WXT writes to .output/, and upload-artifact skips anything under a dot-directory unless this is set.
+          include-hidden-files: true
           if-no-files-found: error
 
   release:
