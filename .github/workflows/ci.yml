@@ -12,8 +12,12 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -23,6 +27,18 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run zip
+      - name: Check version and create tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          CURRENT_VERSION="v$(node -p "require('./package.json').version")"
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ "$LAST_TAG" != "$CURRENT_VERSION" ]; then
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git config user.name "github-actions[bot]"
+            git tag "$CURRENT_VERSION"
+            git push origin "$CURRENT_VERSION"
+            echo "Created and pushed tag: $CURRENT_VERSION"
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: apivu-chrome-extension

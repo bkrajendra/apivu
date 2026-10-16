@@ -12,6 +12,8 @@ Apivu is a local-first Chrome extension for turning browser-copied cURL commands
 [![Release](https://img.shields.io/github/v/release/bkrajendra/apivu)](https://github.com/bkrajendra/apivu/releases/latest)
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-install-4285F4?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/apivu/cnefbhibneloegcfbjjecmpimfhjadme)
 
+<img src="docs/banner.png" alt="apiVU">
+
 </div>
 
 ## How to use
@@ -56,14 +58,19 @@ The extension does not capture page contents or browser network traffic. Saved c
 
 
 ## Release
-To release: 
-- bump the version in package.json, commit, then run 
 
-```bash
-git add .
-git commit -m "message"
-git tag v0.1.2 && git push --tags
-```
+To release a new version:
 
-- Approve the run in GitHub. 
-- The update then goes through Google's review.
+1. **Bump the version** in `package.json` (e.g., `0.1.2` → `0.1.3`).
+2. **Commit and push** to main:
+   ```bash
+   git add package.json
+   git commit -m "release: version 0.1.3"
+   git push
+   ```
+3. **GitHub automatically:**
+   - Detects the version change, creates a tag (`v0.1.3`), and pushes it.
+   - Runs verify, release, and publish jobs.
+   - The publish job is held for your approval before uploading to the Chrome Web Store.
+4. **Approve the run** in GitHub Actions when you're ready to publish.
+5. **The update** then goes through Google's review process.
