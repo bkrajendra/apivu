@@ -69,12 +69,40 @@ jobs:
           echo "tag=$TAG package=$PKG manifest=$MANIFEST"
           [ "$TAG" = "$PKG" ] && [ "$TAG" = "$MANIFEST" ] || { echo "::error::Version mismatch"; exit 1; }
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+      # Exchange the service-account key for an access token directly (JWT bearer grant). google-github-actions/auth
+      # would instead impersonate the account via the IAM Credentials API, which needs the Token Creator role.
       - id: auth
-        uses: google-github-actions/auth@v3
-        with:
-          credentials_json: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
-          token_format: access_token
-          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+        env:
+          SERVICE_ACCOUNT_JSON: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
+        run: |
+          TOKEN=$(node --input-type=module -e '
+            import { createSign } from "node:crypto";
+            const key = JSON.parse(process.env.SERVICE_ACCOUNT_JSON);
+            const tokenUri = key.token_uri || "https://oauth2.googleapis.com/token";
+            const now = Math.floor(Date.now() / 1000);
+            const b64 = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+            const unsigned = `${b64({ alg: "RS256", typ: "JWT" })}.${b64({
+              iss: key.client_email,
+              scope: "https://www.googleapis.com/auth/chromewebstore",
+              aud: tokenUri,
+              iat: now,
+              exp: now + 3600,
+            })}`;
+            const signature = createSign("RSA-SHA256").update(unsigned).sign(key.private_key, "base64url");
+            const res = await fetch(tokenUri, {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: `${unsigned}.${signature}` }),
+            });
+            const body = await res.json();
+            if (!res.ok || !body.access_token) {
+              console.error(`Token request failed (${res.status}): ${body.error ?? ""} ${body.error_description ?? ""}`);
+              process.exit(1);
+            }
+            console.log(body.access_token);
+          ')
+          echo "::add-mask::$TOKEN"
+          echo "access_token=$TOKEN" >> "$GITHUB_OUTPUT"
       - name: Upload to Chrome Web Store
         env:
           TOKEN: ${{ steps.auth.outputs.access_token }}
