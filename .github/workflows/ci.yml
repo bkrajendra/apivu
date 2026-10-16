@@ -13,8 +13,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -23,7 +23,7 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: apivu-chrome-extension
           path: .output/*.zip
@@ -36,11 +36,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: apivu-chrome-extension
           path: release
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: release/*.zip
 
@@ -53,8 +53,8 @@ jobs:
       CWS_EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
       CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: apivu-chrome-extension
           path: release
@@ -68,7 +68,7 @@ jobs:
           [ "$TAG" = "$PKG" ] && [ "$TAG" = "$MANIFEST" ] || { echo "::error::Version mismatch"; exit 1; }
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
       - id: auth
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
           token_format: access_token
