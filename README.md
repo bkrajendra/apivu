@@ -6,7 +6,7 @@
 
 **cURL in. Requests out.**
 
-Apivu is a local-first Chrome extension for turning browser-copied cURL commands into editable REST API requests.
+apiVU is a developer-focused API testing tool that converts raw cURL commands copied from browser DevTools into an interactive API workspace.
 
 [![CI](https://github.com/bkrajendra/apivu/actions/workflows/ci.yml/badge.svg)](https://github.com/bkrajendra/apivu/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/bkrajendra/apivu)](https://github.com/bkrajendra/apivu/releases/latest)
@@ -15,6 +15,17 @@ Apivu is a local-first Chrome extension for turning browser-copied cURL commands
 <img src="docs/banner.png" alt="apiVU">
 
 </div>
+
+Instead of manually recreating requests in Postman or Insomnia, simply paste a cURL command and apiVU automatically extracts:
+
+- HTTP method
+- URL and query parameters
+- Headers 
+- Cookies (forward host specific cookies)
+- Authentication tokens
+- Request body
+
+You can then modify and replay requests, inspect responses, debug APIs, and experiment with real production traffic patterns in seconds.
 
 ## How to use
 

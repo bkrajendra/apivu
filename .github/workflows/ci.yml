@@ -26,7 +26,7 @@ jobs:
       - run: npm run compile
       - run: npm test
       - run: npm run build
-      - run: npm run zip
+      - run: npm run zip:all
       - name: Check version and create tag
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
@@ -41,7 +41,7 @@ jobs:
           fi
       - uses: actions/upload-artifact@v7
         with:
-          name: apivu-chrome-extension
+          name: apivu-extension
           path: .output/*.zip
           # WXT writes to .output/, and upload-artifact skips anything under a dot-directory unless this is set.
           include-hidden-files: true
@@ -56,7 +56,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: apivu-chrome-extension
+          name: apivu-extension
           path: release
       - uses: softprops/action-gh-release@v3
         with:
@@ -74,7 +74,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          name: apivu-chrome-extension
+          name: apivu-extension
           path: release
       - name: Check tag, package.json and zip versions match
         run: |
@@ -147,3 +147,61 @@ jobs:
             -H "Authorization: Bearer $TOKEN" \
             -H "Content-Length: 0" \
             "https://chromewebstore.googleapis.com/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_EXTENSION_ID:publish"
+
+  publish-edge:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      EDGE_PRODUCT_ID: ${{ vars.EDGE_PRODUCT_ID }}
+      EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+      EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: apivu-extension
+          path: release
+      - name: Check tag, package.json and zip versions match
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          ZIP=$(ls release/*-edge.zip)
+          MANIFEST=$(unzip -p "$ZIP" manifest.json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
+          echo "tag=$TAG package=$PKG manifest=$MANIFEST"
+          [ "$TAG" = "$PKG" ] && [ "$TAG" = "$MANIFEST" ] || { echo "::error::Version mismatch"; exit 1; }
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+      - name: Upload to Microsoft Edge Add-ons
+        run: |
+          set -euo pipefail
+          API="https://api.addons.microsoftedge.microsoft.com/v1/products/$EDGE_PRODUCT_ID"
+          AUTH=(-H "Authorization: ApiKey $EDGE_API_KEY" -H "X-ClientID: $EDGE_CLIENT_ID")
+
+          # Operations are asynchronous: the Location header carries the operation id, which is polled until it finishes.
+          poll() {
+            for i in $(seq 1 30); do
+              RES=$(curl -fsS "${AUTH[@]}" "$1")
+              echo "$RES"
+              STATUS=$(echo "$RES" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).status")
+              case "$STATUS" in
+                InProgress) sleep 10 ;;
+                Succeeded) return 0 ;;
+                *) return 1 ;;
+              esac
+            done
+            return 1
+          }
+          operation_id() { tr -d '\r' | awk -F': ' 'tolower($1)=="location"{print $2}' | sed 's#.*/##'; }
+
+          OP=$(curl -fsS -D - -o /dev/null -X POST "${AUTH[@]}" \
+            -H "Content-Type: application/zip" --data-binary "@$ZIP" \
+            "$API/submissions/draft/package" | operation_id)
+          [ -n "$OP" ] || { echo "::error::No operation id returned for upload"; exit 1; }
+          poll "$API/submissions/draft/package/operations/$OP" || { echo "::error::Upload did not succeed"; exit 1; }
+
+          OP=$(curl -fsS -D - -o /dev/null -X POST "${AUTH[@]}" \
+            -H "Content-Type: application/json" -d "{\"notes\": \"Release $GITHUB_REF_NAME\"}" \
+            "$API/submissions" | operation_id)
+          [ -n "$OP" ] || { echo "::error::No operation id returned for publish"; exit 1; }
+          poll "$API/submissions/operations/$OP" || { echo "::error::Submission did not succeed"; exit 1; }
