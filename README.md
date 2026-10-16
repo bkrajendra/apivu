@@ -60,6 +60,8 @@ To release:
 - bump the version in package.json, commit, then run 
 
 ```bash
+git add .
+git commit -m "message"
 git tag v0.1.2 && git push --tags
 ```
 
