@@ -6,10 +6,44 @@ export type CurlParseResult = {
   warnings: string[];
 };
 
+const ANSI_C_SIMPLE_ESCAPES: Record<string, string> = {
+  a: '\x07',
+  b: '\b',
+  e: '\x1b',
+  E: '\x1b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+  v: '\v',
+  '\\': '\\',
+  "'": "'",
+  '"': '"',
+  '?': '?',
+};
+
+// Decodes the escape starting at command[index] === '\\' inside $'...'; returns the text and the last index consumed.
+function readAnsiCEscape(command: string, index: number): { text: string; end: number } {
+  const next = command[index + 1] ?? '';
+  if (next in ANSI_C_SIMPLE_ESCAPES) return { text: ANSI_C_SIMPLE_ESCAPES[next]!, end: index + 1 };
+
+  const hexLengths: Record<string, number> = { x: 2, u: 4, U: 8 };
+  const hexLength = hexLengths[next];
+  if (hexLength) {
+    const digits = /^[0-9a-fA-F]*/.exec(command.slice(index + 2, index + 2 + hexLength))![0];
+    if (digits) return { text: String.fromCodePoint(parseInt(digits, 16)), end: index + 1 + digits.length };
+  }
+
+  const octal = /^[0-7]{1,3}/.exec(command.slice(index + 1, index + 4));
+  if (octal) return { text: String.fromCharCode(parseInt(octal[0], 8)), end: index + octal[0].length };
+
+  return { text: `\\${next}`, end: index + (next ? 1 : 0) };
+}
+
 function tokenize(command: string): string[] {
   const tokens: string[] = [];
   let token = '';
-  let quote: "'" | '"' | null = null;
+  let quote: "'" | '"' | '$' | null = null;
   let started = false;
 
   for (let index = 0; index < command.length; index += 1) {
@@ -30,6 +64,19 @@ function tokenize(command: string): string[] {
       continue;
     }
 
+    if (quote === '$') {
+      if (char === "'") {
+        quote = null;
+      } else if (char === '\\') {
+        const escape = readAnsiCEscape(command, index);
+        token += escape.text;
+        index = escape.end;
+      } else {
+        token += char;
+      }
+      continue;
+    }
+
     if (quote === '"') {
       if (char === '"') {
         quote = null;
@@ -42,7 +89,11 @@ function tokenize(command: string): string[] {
       continue;
     }
 
-    if (char === "'" || char === '"') {
+    if (char === '$' && command[index + 1] === "'") {
+      quote = '$';
+      started = true;
+      index += 1;
+    } else if (char === "'" || char === '"') {
       quote = char;
       started = true;
     } else if (char === '\\' && index + 1 < command.length) {

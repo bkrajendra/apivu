@@ -3,6 +3,16 @@ import { parseCurl } from './parse-curl';
 import { exportCollections } from '../storage/collections';
 
 describe('parseCurl', () => {
+  it('decodes ANSI-C quoted $\'...\' bodies like Chrome\'s "Copy as cURL (bash)"', () => {
+    const result = parseCurl(
+      String.raw`curl --url 'https://example.com/graphql' -H 'Content-Type: application/json' --data-raw $'{"q":"query($id: ID\u0021) {\\n  a\\n}","note":"it\'s","tab":"\x41\101"}'`,
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.request?.body).toBe(String.raw`{"q":"query($id: ID!) {\n  a\n}","note":"it's","tab":"AA"}`);
+    expect(JSON.parse(result.request!.body)).toMatchObject({ q: 'query($id: ID!) {\n  a\n}' });
+  });
+
   it('extracts URL, method, headers, bearer auth, cookies, and body', () => {
     const result = parseCurl(`curl 'https://api.example.com/v1/users?active=true' \\
       -X POST -H 'Authorization: Bearer secret-token' \\

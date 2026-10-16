@@ -2,7 +2,7 @@
   "name": "apivu",
   "description": "Parse browser cURL into editable REST API requests.",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -10,10 +10,14 @@
     "zip": "wxt zip",
     "compile": "tsc --noEmit",
     "test": "vitest run",
+    "zip:edge": "wxt zip -b edge",
+    "zip:all": "wxt zip && wxt zip -b edge",
     "postinstall": "wxt prepare"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
     "lucide-react": "^0.468.0",
+    "modern-json-react": "^1.2.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },

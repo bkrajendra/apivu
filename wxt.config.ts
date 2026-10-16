@@ -6,7 +6,7 @@ export default defineConfig({
   manifest: {
     name: 'apiVU',
     description: 'Turn browser cURL into editable REST API requests.',
-    minimum_chrome_version: '114',
+    minimum_chrome_version: '116',
     permissions: ['storage'],
     optional_host_permissions: ['http://*/*', 'https://*/*'],
     action: {

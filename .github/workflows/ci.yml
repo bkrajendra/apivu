@@ -43,3 +43,61 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: release/*.zip
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      CWS_EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
+      CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: apivu-chrome-extension
+          path: release
+      - name: Check tag, package.json and zip versions match
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(node -p "require('./package.json').version")
+          ZIP=$(ls release/*-chrome.zip)
+          MANIFEST=$(unzip -p "$ZIP" manifest.json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
+          echo "tag=$TAG package=$PKG manifest=$MANIFEST"
+          [ "$TAG" = "$PKG" ] && [ "$TAG" = "$MANIFEST" ] || { echo "::error::Version mismatch"; exit 1; }
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.CWS_SERVICE_ACCOUNT_JSON }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+      - name: Upload to Chrome Web Store
+        env:
+          TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          ITEM="publishers/$CWS_PUBLISHER_ID/items/$CWS_EXTENSION_ID"
+          RES=$(curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -T "$ZIP" \
+            "https://chromewebstore.googleapis.com/upload/v2/$ITEM:upload")
+          echo "$RES"
+          STATE=$(echo "$RES" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).uploadState")
+          for i in 1 2 3 4 5 6; do
+            [ "$STATE" = "IN_PROGRESS" ] || break
+            sleep 10
+            RES=$(curl -fsS -H "Authorization: Bearer $TOKEN" \
+              "https://chromewebstore.googleapis.com/v2/$ITEM:fetchStatus")
+            echo "$RES"
+            STATE=$(echo "$RES" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).lastAsyncUploadState || 'IN_PROGRESS'")
+          done
+          [ "$STATE" = "SUCCEEDED" ] || [ "$STATE" = "SUCCESS" ] || { echo "::error::Upload state: $STATE"; exit 1; }
+      - name: Submit for review
+        env:
+          TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Length: 0" \
+            "https://chromewebstore.googleapis.com/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_EXTENSION_ID:publish"

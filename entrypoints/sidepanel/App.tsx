@@ -1,29 +1,68 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
-  Braces,
   Check,
   Download,
   Eye,
   EyeOff,
+  FileCode2,
+  Folder,
   FolderOpen,
+  Github,
+  History,
+  Layers,
+  Maximize2,
   Moon,
+  PanelRight,
+  Rocket,
   Plus,
   Save,
   Send,
+  Settings,
   Sun,
   Trash2,
   X,
 } from 'lucide-react';
+import { JsonEditor, type ThemeConfig } from 'modern-json-react';
+import 'modern-json-react/styles.css';
 import { parseCurl } from '../../src/domain/parse-curl';
 import { type ApiRequest, type HeaderPair, type SavedCollection } from '../../src/domain/request';
 import { createCollectionId, exportCollections, loadCollections, saveCollections } from '../../src/storage/collections';
+import { addHistoryEntry, loadHistory, saveHistory, type HistoryEntry } from '../../src/storage/history';
 import './App.css';
 
 const tabs = ['Params', 'Headers', 'Auth', 'Cookies', 'Body'] as const;
 type RequestTab = (typeof tabs)[number];
+type View = 'requests' | 'collections' | 'environments' | 'history' | 'settings';
+type ThemePreference = 'system' | 'light' | 'dark';
 type ResponseData = { status: number; statusText: string; elapsed: number; headers: HeaderPair[]; body: string; truncated: boolean };
 const secretField = /auth|cookie|token|secret|password|passwd|credential|session|api[_-]?key/i;
+const methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
+
+const navItems: { view: View; label: string; icon: ReactNode }[] = [
+  { view: 'requests', label: 'Requests', icon: <FileCode2 size={17} strokeWidth={1.85} /> },
+  { view: 'collections', label: 'Collections', icon: <Folder size={17} strokeWidth={1.85} /> },
+  { view: 'environments', label: 'Environments', icon: <Layers size={17} strokeWidth={1.85} /> },
+  { view: 'history', label: 'History', icon: <History size={17} strokeWidth={1.85} /> },
+];
+
+// The editor applies its theme as inline CSS variables, so brand colours are passed in rather than set in CSS.
+const editorThemes: Record<'light' | 'dark', ThemeConfig> = {
+  light: {
+    name: 'apivu-light', bg: '#FFFFFF', fg: '#172033', border: '#E3E8EF', gutterBg: '#F8FAFC', gutterFg: '#8B98A9',
+    selection: 'rgba(0, 122, 255, 0.16)', cursor: '#007AFF', keyColor: '#175CD3', stringColor: '#218345', numberColor: '#B45309',
+    booleanColor: '#7651D6', nullColor: '#7651D6', bracketColor: '#64748B', bracketMatchBg: 'rgba(0, 122, 255, 0.14)',
+    errorColor: '#D9363E', warningColor: '#B96B05', successColor: '#16834A', treeLine: '#E3E8EF', treeHover: '#F2F6FA',
+    treeSelected: '#EAF3FF', typeBadgeBg: '#F2F6FA',
+  },
+  dark: {
+    name: 'apivu-dark', bg: '#10161E', fg: '#F3F6FA', border: '#2A3442', gutterBg: '#10161E', gutterFg: '#748195',
+    selection: 'rgba(10, 132, 255, 0.28)', cursor: '#0A84FF', keyColor: '#79B8FF', stringColor: '#7EE787', numberColor: '#F2CC60',
+    booleanColor: '#D2A8FF', nullColor: '#D2A8FF', bracketColor: '#A3AFBF', bracketMatchBg: 'rgba(10, 132, 255, 0.24)',
+    errorColor: '#FF6B72', warningColor: '#F5B94C', successColor: '#3CCB7F', treeLine: '#2A3442', treeHover: '#202B38',
+    treeSelected: '#152B43', typeBadgeBg: '#1B2430',
+  },
+};
 
 function displayUrl(value: string, reveal: boolean): string {
   if (reveal) return value;
@@ -81,10 +120,103 @@ function basicAuthorization(username: string, password: string): string {
   return `Basic ${btoa(binary)}`;
 }
 
-function App() {
-  const [theme, setTheme] = useState<'light' | 'dark'>(() =>
-    window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+const isTabView = new URLSearchParams(window.location.search).get('view') === 'tab';
+
+async function toggleViewMode() {
+  if (isTabView) {
+    const [{ id: windowId }, tab] = await Promise.all([browser.windows.getCurrent(), browser.tabs.getCurrent()]);
+    await browser.sidePanel.open({ windowId: windowId! });
+    if (tab?.id !== undefined) await browser.tabs.remove(tab.id);
+  } else {
+    await browser.tabs.create({ url: browser.runtime.getURL('/sidepanel.html?view=tab') });
+    window.close();
+  }
+}
+
+const MAX_JSON_EDITOR_BYTES = 200_000;
+
+function prettyJson(text: string) {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
+function isJsonDocument(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed || !['{', '['].includes(trimmed[0]!)) return false;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function formatBytes(text: string) {
+  const bytes = new TextEncoder().encode(text).byteLength;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatTime(timestamp: number) {
+  const seconds = Math.round((Date.now() - timestamp) / 1000);
+  if (seconds < 60) return 'Just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)} h ago`;
+  return new Date(timestamp).toLocaleDateString();
+}
+
+function methodClass(method: string) {
+  return `method-badge method-${method.toLowerCase()}`;
+}
+
+function WarningsBadge({ warnings }: { warnings: string[] }) {
+  const unique = [...new Set(warnings)];
+  if (unique.length === 0) return null;
+  return (
+    <div className="warnings-badge">
+      <button className="icon-button warnings-trigger" type="button" aria-label={`${unique.length} warning${unique.length === 1 ? '' : 's'}`} aria-describedby="warnings-popover">
+        <AlertTriangle size={16} />
+        <span className="warnings-count">{unique.length}</span>
+      </button>
+      <div className="warnings-popover" id="warnings-popover" role="tooltip">
+        <p className="warnings-title">Warnings</p>
+        <ul>{unique.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+      </div>
+    </div>
   );
+}
+
+function SegmentedControl<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: { value: T; label: string }[]; onChange: (value: T) => void }) {
+  return (
+    <div className="segmented" role="radiogroup" aria-label={label}>
+      {options.map((option) => (
+        <button key={option.value} type="button" role="radio" aria-checked={value === option.value} className={value === option.value ? 'is-selected' : ''} onClick={() => onChange(option.value)}>
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function EmptyState({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
+  return (
+    <div className="empty-state">
+      <span className="empty-icon">{icon}</span>
+      <h2>{title}</h2>
+      <p>{children}</p>
+    </div>
+  );
+}
+
+function App() {
+  const [themePreference, setThemePreference] = useState<ThemePreference>('system');
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const theme: 'light' | 'dark' = themePreference === 'system' ? (systemDark ? 'dark' : 'light') : themePreference;
+  const [view, setView] = useState<View>('requests');
   const [rawCurl, setRawCurl] = useState('');
   const [showParser, setShowParser] = useState(true);
   const [request, setRequest] = useState<ApiRequest | null>(null);
@@ -93,8 +225,9 @@ function App() {
   const [parseErrors, setParseErrors] = useState<string[]>([]);
   const [parseWarnings, setParseWarnings] = useState<string[]>([]);
   const [collections, setCollections] = useState<SavedCollection[]>([]);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [keepHistory, setKeepHistory] = useState(true);
   const [collectionName, setCollectionName] = useState('My collection');
-  const [savedOpen, setSavedOpen] = useState(false);
   const [includeSecrets, setIncludeSecrets] = useState(false);
   const [showSecrets, setShowSecrets] = useState(false);
   const [includeBrowserCookies, setIncludeBrowserCookies] = useState(false);
@@ -102,20 +235,45 @@ function App() {
   const [sendError, setSendError] = useState('');
   const [sendWarnings, setSendWarnings] = useState<string[]>([]);
   const [responseData, setResponseData] = useState<ResponseData | null>(null);
+  const [responseTab, setResponseTab] = useState<'Body' | 'Headers'>('Body');
+  const [bodyEditorMode, setBodyEditorMode] = useState<'code' | 'tree' | 'split'>('code');
+  const [responseEditorMode, setResponseEditorMode] = useState<'code' | 'tree' | 'split'>('code');
+  const [bodyView, setBodyView] = useState<'json' | 'raw' | null>(null);
   const [responseMode, setResponseMode] = useState<'Pretty' | 'Raw'>('Pretty');
   const [notice, setNotice] = useState('');
+  const version = useMemo(() => browser.runtime.getManifest().version, []);
 
   useEffect(() => {
     void loadCollections().then(setCollections).catch(() => setNotice('Local storage is unavailable.'));
-    void browser.storage.local.get('uiTheme').then(({ uiTheme }) => {
-      if (uiTheme === 'light' || uiTheme === 'dark') setTheme(uiTheme);
+    void loadHistory().then(setHistory).catch(() => undefined);
+    void browser.storage.local.get(['uiTheme', 'keepHistory']).then(({ uiTheme, keepHistory: storedKeepHistory }) => {
+      if (uiTheme === 'light' || uiTheme === 'dark' || uiTheme === 'system') setThemePreference(uiTheme);
+      if (typeof storedKeepHistory === 'boolean') setKeepHistory(storedKeepHistory);
     }).catch(() => undefined);
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = (event: MediaQueryListEvent) => setSystemDark(event.matches);
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
   }, []);
 
-  const toggleTheme = () => {
-    const nextTheme = theme === 'light' ? 'dark' : 'light';
-    setTheme(nextTheme);
-    void browser.storage.local.set({ uiTheme: nextTheme }).catch(() => undefined);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(''), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  const changeThemePreference = (next: ThemePreference) => {
+    setThemePreference(next);
+    void browser.storage.local.set({ uiTheme: next }).catch(() => undefined);
+  };
+
+  const changeKeepHistory = (next: boolean) => {
+    setKeepHistory(next);
+    void browser.storage.local.set({ keepHistory: next }).catch(() => undefined);
   };
 
   const queryPairs = useMemo(() => {
@@ -141,8 +299,10 @@ function App() {
     setParseWarnings(result.warnings);
     if (!result.request) return;
     setRequest(result.request);
+    setBodyView(null);
     setResponseData(null);
     setSendError('');
+    setSendWarnings([]);
     setShowParser(false);
   };
 
@@ -171,6 +331,19 @@ function App() {
     }
   };
 
+  const removeQueryPair = (index: number) => {
+    if (!request) return;
+    try {
+      const nextUrl = new URL(request.url);
+      const pairs = Array.from(nextUrl.searchParams.entries()).filter((_, rowIndex) => rowIndex !== index);
+      nextUrl.search = '';
+      pairs.forEach(([pairKey, pairValue]) => nextUrl.searchParams.append(pairKey, pairValue));
+      updateRequest({ url: nextUrl.toString() });
+    } catch {
+      setSendError('Enter a valid URL before editing query parameters.');
+    }
+  };
+
   const updatePair = (field: 'headers' | 'cookies', index: number, key: 'name' | 'value', value: string) => {
     if (!request) return;
     const rows = [...request[field]];
@@ -188,6 +361,15 @@ function App() {
   const removePair = (field: 'headers' | 'cookies', index: number) => {
     if (!request) return;
     updateRequest({ [field]: request[field].filter((_, rowIndex) => rowIndex !== index) });
+  };
+
+  const recordHistory = (sent: ApiRequest, status: number | null, elapsed: number | null) => {
+    if (!keepHistory) return;
+    setHistory((current) => {
+      const next = addHistoryEntry(current, { request: sent, status, elapsed, sentAt: Date.now() });
+      void saveHistory(next).catch(() => undefined);
+      return next;
+    });
   };
 
   const handleSend = async () => {
@@ -277,20 +459,24 @@ function App() {
         signal: controller.signal,
       });
       const body = await readBody(response);
+      const elapsed = Math.round(performance.now() - startedAt);
       setResponseData({
         status: response.status,
         statusText: response.statusText,
-        elapsed: Math.round(performance.now() - startedAt),
+        elapsed,
         headers: Array.from(response.headers.entries()).map(([name, value]) => ({ name, value })),
         body: body.text,
         truncated: body.truncated,
       });
+      setResponseTab('Body');
       setSendWarnings(warnings);
+      recordHistory(requestToSend, response.status, elapsed);
     } catch (error) {
       setSendError(error instanceof DOMException && error.name === 'AbortError'
         ? 'Request timed out after 30 seconds.'
         : 'Request failed. Check the URL, host permission, network, or browser policy.');
       setSendWarnings(warnings);
+      recordHistory(requestToSend, null, null);
     } finally {
       window.clearTimeout(timeout);
       setSending(false);
@@ -332,7 +518,14 @@ function App() {
       .catch(() => setNotice('Could not clear local storage.'));
   };
 
+  const handleClearHistory = async () => {
+    setHistory([]);
+    await saveHistory([]).then(() => setNotice('Request history cleared.'))
+      .catch(() => setNotice('Could not clear history.'));
+  };
+
   const handleExport = () => {
+    if (collections.length === 0) return;
     const blob = new Blob([exportCollections(collections, includeSecrets)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
@@ -343,14 +536,38 @@ function App() {
     setNotice(includeSecrets ? 'Exported with secrets.' : 'Exported with secrets redacted.');
   };
 
-  const loadSaved = (savedRequest: ApiRequest, parentName: string) => {
+  const openRequest = (savedRequest: ApiRequest, parentName?: string) => {
     setRequest(savedRequest);
-    setCollectionName(parentName);
+    setBodyView(null);
+    if (parentName) setCollectionName(parentName);
     setRawCurl(savedRequest.sourceCurl);
+    setParseErrors([]);
+    setParseWarnings([]);
+    setSendWarnings([]);
+    setSendError('');
     setResponseData(null);
     setShowParser(false);
-    setSavedOpen(false);
+    setView('requests');
   };
+
+  const startNew = () => {
+    setShowParser(true);
+    setParseErrors([]);
+    setView('requests');
+  };
+
+  const effectiveBodyView = bodyView ?? (isJsonDocument(request?.body ?? '') ? 'json' : 'raw');
+  // The editor owns its text while editing; this seed is only recomputed when a request loads or the JSON view is (re)entered,
+  // so reformatting never fights the cursor.
+  const bodySeed = useMemo(
+    () => prettyJson(request?.body ?? ''),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [request?.id, effectiveBodyView],
+  );
+  const responseIsJson = useMemo(
+    () => Boolean(responseData && !responseData.truncated && responseData.body.length <= MAX_JSON_EDITOR_BYTES && isJsonDocument(responseData.body)),
+    [responseData],
+  );
 
   const prettyBody = useMemo(() => {
     if (!responseData?.body) return '';
@@ -361,220 +578,373 @@ function App() {
     }
   }, [responseData?.body]);
 
+  const savedCount = collections.reduce((total, collection) => total + collection.requests.length, 0);
+  const revealButton = (label: string) => (
+    <button className="text-button" type="button" onClick={() => setShowSecrets((visible) => !visible)}>
+      {showSecrets ? <EyeOff size={14} /> : <Eye size={14} />}{showSecrets ? `Hide ${label}` : `Reveal ${label}`}
+    </button>
+  );
+
+  const renderRequests = () => (
+    <>
+      <div className="page-heading">
+        <div>
+          <p className="eyebrow">Request builder</p>
+          <h1>{showParser || !request ? 'Start with cURL' : 'Review request'}</h1>
+        </div>
+        {!showParser && request && <button className="button button-secondary" type="button" onClick={startNew}><Plus size={15} /> Create New</button>}
+        {showParser && request && <button className="button button-ghost" type="button" onClick={() => setShowParser(false)}>Back to request</button>}
+      </div>
+
+      {(showParser || !request) && (
+        <section className="card import-card">
+          <label className="field-label" htmlFor="curl-input">Paste cURL</label>
+          <textarea
+            id="curl-input"
+            className="input code-text curl-input"
+            value={rawCurl}
+            onChange={(event) => setRawCurl(event.target.value)}
+            onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') handleParse(); }}
+            placeholder={'curl \'https://api.example.com/v1/users?active=true\' \\\n  -H \'Authorization: Bearer your-token\' \\\n  -H \'Content-Type: application/json\' \\\n  -d \'{"name":"Ada"}\''}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+          />
+          <div className="import-footer">
+            <span className="caption">Parsed on this device. Nothing is uploaded. <kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>Enter</kbd> to create.</span>
+            <div className="inline-actions">
+              <WarningsBadge warnings={parseWarnings} />
+              <button className="button button-primary" type="button" onClick={handleParse} disabled={!rawCurl.trim()}>Create request</button>
+            </div>
+          </div>
+          {parseErrors.map((error) => <p className="inline-error" role="alert" key={error}><AlertTriangle size={14} />{error}</p>)}
+        </section>
+      )}
+
+      {request && !showParser && (
+        <>
+          <div className="url-row">
+            <div className="url-field">
+              <select className={`method-select ${methodClass(request.method)}`} value={request.method} onChange={(event) => updateRequest({ method: event.target.value })} aria-label="HTTP method">
+                {methods.map((method) => <option key={method}>{method}</option>)}
+              </select>
+              <input className="url-input" value={visibleUrl} onFocus={() => setUrlFocused(true)} onBlur={() => setUrlFocused(false)} onChange={(event) => updateRequest({ url: event.target.value })} aria-label="Request URL" placeholder="https://api.example.com/path" spellCheck={false} />
+              <WarningsBadge warnings={[...parseWarnings, ...sendWarnings]} />
+            </div>
+            <button className="button button-primary button-lg send-button" type="button" onClick={() => void handleSend()} disabled={sending}>
+              {sending ? <><span className="spinner" /> Sending</> : <><Send size={16} /> Send</>}
+            </button>
+          </div>
+          <p className="caption url-caption">Chrome asks for access to this host only, the first time you send to it.</p>
+          {sendError && <p className="inline-error" role="alert"><AlertTriangle size={14} />{sendError}</p>}
+
+          <nav className="tab-list" aria-label="Request settings" role="tablist">
+            {tabs.map((tab) => (
+              <button key={tab} type="button" role="tab" aria-selected={activeTab === tab} className="tab" onClick={() => setActiveTab(tab)}>
+                {tab}
+                {tab === 'Headers' && request.headers.length > 0 && <span className="count-badge">{request.headers.length}</span>}
+                {tab === 'Params' && queryPairs.length > 0 && <span className="count-badge">{queryPairs.length}</span>}
+                {tab === 'Cookies' && request.cookies.length > 0 && <span className="count-badge">{request.cookies.length}</span>}
+              </button>
+            ))}
+          </nav>
+
+          <div className="tab-panel" role="tabpanel" aria-label={activeTab}>
+            {activeTab === 'Params' && (
+              <>
+                {queryPairs.length > 0 && <div className="pair-heading"><span>Key</span><span>Value</span><span /></div>}
+                {queryPairs.map(([key, value], index) => (
+                  <div className="pair-row" key={`${index}-${key}`}>
+                    <input className="input" value={key} aria-label={`Parameter ${index + 1} key`} placeholder="key" onChange={(event) => updateQueryPair(index, event.target.value, value)} />
+                    <input className="input" type={showSecrets || !secretField.test(key) ? 'text' : 'password'} value={value} aria-label={`Parameter ${index + 1} value`} placeholder="value" onChange={(event) => updateQueryPair(index, key, event.target.value)} />
+                    <button className="icon-button" type="button" title="Remove parameter" aria-label={`Remove parameter ${index + 1}`} onClick={() => removeQueryPair(index)}><X size={15} /></button>
+                  </div>
+                ))}
+                {queryPairs.length === 0 && <p className="empty-note">No query parameters.</p>}
+                <div className="panel-actions">
+                  <button className="text-button" type="button" onClick={addQueryPair}><Plus size={14} /> Add parameter</button>
+                  {queryPairs.some(([key]) => secretField.test(key)) && revealButton('secret values')}
+                </div>
+              </>
+            )}
+            {activeTab === 'Headers' && (
+              <>
+                {request.headers.length > 0 && <div className="pair-heading"><span>Header</span><span>Value</span><span /></div>}
+                {request.headers.map((header, index) => (
+                  <div className="pair-row" key={index}>
+                    <input className="input" value={header.name} aria-label={`Header ${index + 1} name`} placeholder="Header name" onChange={(event) => updatePair('headers', index, 'name', event.target.value)} />
+                    <input className="input" value={header.value} aria-label={`Header ${index + 1} value`} placeholder="Value" onChange={(event) => updatePair('headers', index, 'value', event.target.value)} />
+                    <button className="icon-button" type="button" title="Remove header" aria-label={`Remove header ${index + 1}`} onClick={() => removePair('headers', index)}><X size={15} /></button>
+                  </div>
+                ))}
+                {request.headers.length === 0 && <p className="empty-note">No headers added.</p>}
+                <div className="panel-actions"><button className="text-button" type="button" onClick={() => addPair('headers')}><Plus size={14} /> Add header</button></div>
+              </>
+            )}
+            {activeTab === 'Auth' && (
+              <div className="form-stack">
+                <label className="field-label" htmlFor="auth-type">Auth type</label>
+                <select id="auth-type" className="input select" value={request.auth.type} onChange={(event) => updateRequest({ auth: { ...request.auth, type: event.target.value as ApiRequest['auth']['type'] } })}>
+                  <option value="none">No auth</option><option value="bearer">Bearer token</option><option value="basic">Basic auth</option>
+                </select>
+                {request.auth.type === 'bearer' && <label className="field-label" htmlFor="bearer-token">Token<input id="bearer-token" className="input" type={showSecrets ? 'text' : 'password'} autoComplete="off" value={request.auth.token} onChange={(event) => updateRequest({ auth: { ...request.auth, token: event.target.value } })} placeholder="Paste token" /></label>}
+                {request.auth.type === 'basic' && <>
+                  <label className="field-label" htmlFor="basic-user">Username<input id="basic-user" className="input" autoComplete="off" value={request.auth.username} onChange={(event) => updateRequest({ auth: { ...request.auth, username: event.target.value } })} placeholder="Username" /></label>
+                  <label className="field-label" htmlFor="basic-password">Password<input id="basic-password" className="input" type={showSecrets ? 'text' : 'password'} autoComplete="new-password" value={request.auth.password} onChange={(event) => updateRequest({ auth: { ...request.auth, password: event.target.value } })} placeholder="Password" /></label>
+                </>}
+                {request.auth.type !== 'none' && <div>{revealButton('secrets')}</div>}
+              </div>
+            )}
+            {activeTab === 'Cookies' && (
+              <>
+                <div className="callout callout-warning"><AlertTriangle size={15} /><p>Chrome blocks manually setting the Cookie header. Values are saved for reference, not replayed.</p></div>
+                {request.cookies.length > 0 && <div className="pair-heading"><span>Cookie</span><span>Value</span><span /></div>}
+                {request.cookies.map((cookie, index) => (
+                  <div className="pair-row" key={index}>
+                    <input className="input" value={cookie.name} aria-label={`Cookie ${index + 1} name`} placeholder="Name" onChange={(event) => updatePair('cookies', index, 'name', event.target.value)} />
+                    <input className="input" value={cookie.value} type={showSecrets ? 'text' : 'password'} aria-label={`Cookie ${index + 1} value`} placeholder="Value" onChange={(event) => updatePair('cookies', index, 'value', event.target.value)} />
+                    <button className="icon-button" type="button" title="Remove cookie" aria-label={`Remove cookie ${index + 1}`} onClick={() => removePair('cookies', index)}><X size={15} /></button>
+                  </div>
+                ))}
+                {request.cookies.length === 0 && <p className="empty-note">No pasted cookies.</p>}
+                <div className="panel-actions">
+                  <button className="text-button" type="button" onClick={() => addPair('cookies')}><Plus size={14} /> Add cookie</button>
+                  {request.cookies.length > 0 && revealButton('cookie values')}
+                </div>
+                <label className="check-row"><input type="checkbox" checked={includeBrowserCookies} onChange={(event) => setIncludeBrowserCookies(event.target.checked)} /><span>Include browser-managed cookies for this host</span></label>
+              </>
+            )}
+            {activeTab === 'Body' && (
+              <>
+                <div className="body-heading">
+                  <span className="field-label">Request body</span>
+                  <SegmentedControl label="Body format" value={effectiveBodyView} options={[{ value: 'json', label: 'JSON' }, { value: 'raw', label: 'Raw' }]} onChange={setBodyView} />
+                </div>
+                {effectiveBodyView === 'json'
+                  ? <JsonEditor className="json-field" value={bodySeed} theme={editorThemes[theme]} height={isTabView ? 420 : 300} mode={bodyEditorMode} onModeChange={setBodyEditorMode} indentation={2} onChange={(_value, rawText) => { setBodyView('json'); updateRequest({ body: rawText }); }} />
+                  : <textarea className="input code-text body-input" value={request.body} onChange={(event) => updateRequest({ body: event.target.value })} placeholder="Request body" spellCheck={false} />}
+              </>
+            )}
+          </div>
+
+          <div className="save-row">
+            <label className="field-label" htmlFor="request-name">Request name<input id="request-name" className="input" value={request.name} onChange={(event) => updateRequest({ name: event.target.value })} /></label>
+            <label className="field-label" htmlFor="collection-name">Collection<input id="collection-name" className="input" list="collection-options" value={collectionName} onChange={(event) => setCollectionName(event.target.value)} /></label>
+            <datalist id="collection-options">{collections.map((collection) => <option key={collection.id} value={collection.name} />)}</datalist>
+            <button className="button button-secondary save-button" type="button" onClick={() => void handleSave()} title="Save request locally"><Save size={15} /> Save</button>
+          </div>
+
+          {responseData && (
+            <section className="card response-card" aria-label="Response">
+              <div className="response-meta">
+                <span className="section-title">Response</span>
+                <span className={`status-pill ${responseData.status < 300 ? 'is-success' : responseData.status < 400 ? 'is-info' : 'is-error'}`}>
+                  {responseData.status < 400 ? <Check size={13} /> : <AlertTriangle size={13} />}{responseData.status} {responseData.statusText}
+                </span>
+                <span className="caption">{responseData.elapsed} ms</span>
+                <span className="caption">{formatBytes(responseData.body)}{responseData.truncated ? ' (truncated)' : ''}</span>
+              </div>
+              <div className="response-toolbar">
+                <nav className="tab-list tab-list-compact" role="tablist" aria-label="Response">
+                  <button type="button" role="tab" className="tab" aria-selected={responseTab === 'Body'} onClick={() => setResponseTab('Body')}>Body</button>
+                  <button type="button" role="tab" className="tab" aria-selected={responseTab === 'Headers'} onClick={() => setResponseTab('Headers')}>Headers<span className="count-badge">{responseData.headers.length}</span></button>
+                </nav>
+                {responseTab === 'Body' && <SegmentedControl label="Response format" value={responseMode} options={[{ value: 'Pretty', label: 'Pretty' }, { value: 'Raw', label: 'Raw' }]} onChange={setResponseMode} />}
+              </div>
+              {responseTab === 'Body' && (responseMode === 'Pretty' && responseIsJson
+                ? <JsonEditor className="json-field" value={prettyBody} theme={editorThemes[theme]} height={isTabView ? 460 : 340} mode={responseEditorMode} onModeChange={setResponseEditorMode} indentation={2} readOnly />
+                : <pre className="response-body code-text">{responseData.truncated ? `${responseMode === 'Pretty' ? prettyBody : responseData.body}\n\n[Response truncated at 1 MB]` : (responseMode === 'Pretty' ? prettyBody : responseData.body) || 'Empty response body'}</pre>)}
+              {responseTab === 'Headers' && (
+                <div className="response-headers">
+                  {responseData.headers.length === 0 && <p className="empty-note">No response headers.</p>}
+                  {responseData.headers.map((header) => <div className="response-header" key={header.name}><span>{header.name}</span><code>{header.value}</code></div>)}
+                </div>
+              )}
+            </section>
+          )}
+        </>
+      )}
+    </>
+  );
+
+  const renderCollections = () => (
+    <>
+      <div className="page-heading">
+        <div>
+          <p className="eyebrow">Workspace</p>
+          <h1>Collections</h1>
+        </div>
+        <button className="button button-secondary" type="button" onClick={handleExport} disabled={collections.length === 0}><Download size={15} /> Export JSON</button>
+      </div>
+      {collections.length === 0 ? (
+        <EmptyState icon={<Folder size={20} />} title="No saved requests yet">Build a request, give it a name and collection, then press Save. It stays on this device.</EmptyState>
+      ) : (
+        <>
+          {collections.map((collection) => (
+            <section className="card list-card" key={collection.id} aria-label={collection.name}>
+              <header className="list-card-header"><FolderOpen size={16} /><h2>{collection.name}</h2><span className="count-badge">{collection.requests.length}</span></header>
+              <ul className="list">
+                {collection.requests.map((savedRequest) => (
+                  <li className="list-row" key={savedRequest.id}>
+                    <button className="list-main" type="button" onClick={() => openRequest(savedRequest, collection.name)}>
+                      <span className={methodClass(savedRequest.method)}>{savedRequest.method}</span>
+                      <span className="list-text"><span className="list-title">{savedRequest.name}</span><span className="list-sub">{displayUrl(savedRequest.url, false)}</span></span>
+                    </button>
+                    <button className="icon-button icon-danger" type="button" title={`Delete ${savedRequest.name}`} aria-label={`Delete ${savedRequest.name}`} onClick={() => void handleDelete(savedRequest.id)}><Trash2 size={15} /></button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+          <label className="check-row"><input type="checkbox" checked={includeSecrets} onChange={(event) => setIncludeSecrets(event.target.checked)} /><span>Include secrets in export. Request bodies are always included and may contain secrets.</span></label>
+        </>
+      )}
+    </>
+  );
+
+  const renderHistory = () => (
+    <>
+      <div className="page-heading">
+        <div>
+          <p className="eyebrow">Workspace</p>
+          <h1>History</h1>
+        </div>
+        <button className="button button-secondary" type="button" onClick={() => void handleClearHistory()} disabled={history.length === 0}><Trash2 size={15} /> Clear history</button>
+      </div>
+      {!keepHistory && <div className="callout callout-info"><History size={15} /><p>History is turned off. Turn it on in Settings to record sent requests.</p></div>}
+      {history.length === 0 ? (
+        <EmptyState icon={<History size={20} />} title="No requests sent yet">Requests you send appear here, newest first. The last 50 are kept on this device.</EmptyState>
+      ) : (
+        <section className="card list-card">
+          <ul className="list">
+            {history.map((entry) => (
+              <li className="list-row" key={entry.id}>
+                <button className="list-main" type="button" onClick={() => openRequest(entry.request)}>
+                  <span className={methodClass(entry.request.method)}>{entry.request.method}</span>
+                  <span className="list-text"><span className="list-title">{displayUrl(entry.request.url, false)}</span><span className="list-sub">{formatTime(entry.sentAt)}{entry.elapsed !== null ? ` · ${entry.elapsed} ms` : ''}</span></span>
+                </button>
+                <span className={`status-pill ${entry.status === null || entry.status >= 400 ? 'is-error' : entry.status >= 300 ? 'is-info' : 'is-success'}`}>{entry.status ?? 'Failed'}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </>
+  );
+
+  const renderEnvironments = () => (
+    <>
+      <div className="page-heading">
+        <div>
+          <p className="eyebrow">Workspace</p>
+          <h1>Environments</h1>
+        </div>
+      </div>
+      <EmptyState icon={<Layers size={20} />} title="Environments are coming soon">Environment variables such as base URLs and tokens, swapped per environment, are planned for a future version.</EmptyState>
+    </>
+  );
+
+  const renderSettings = () => (
+    <>
+      <div className="page-heading">
+        <div>
+          <p className="eyebrow">Workspace</p>
+          <h1>Settings</h1>
+        </div>
+      </div>
+      <section className="card settings-card">
+        <div className="setting-row">
+          <div><h2>Appearance</h2><p className="caption">System follows your operating system.</p></div>
+          <SegmentedControl label="Theme" value={themePreference} options={[{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]} onChange={changeThemePreference} />
+        </div>
+        <div className="setting-row">
+          <div><h2>Request history</h2><p className="caption">Keep the last 50 sent requests on this device.</p></div>
+          <label className="switch"><input type="checkbox" role="switch" checked={keepHistory} onChange={(event) => changeKeepHistory(event.target.checked)} /><span className="switch-track" aria-hidden="true" /><span className="sr-only">Keep request history</span></label>
+        </div>
+        <div className="setting-row">
+          <div><h2>Export secrets</h2><p className="caption">Include auth, cookies and secret parameters in exported JSON.</p></div>
+          <label className="switch"><input type="checkbox" role="switch" checked={includeSecrets} onChange={(event) => setIncludeSecrets(event.target.checked)} /><span className="switch-track" aria-hidden="true" /><span className="sr-only">Include secrets in export</span></label>
+        </div>
+        <div className="setting-row">
+          <div><h2>Local data</h2><p className="caption">{savedCount} saved request{savedCount === 1 ? '' : 's'} · {history.length} history entr{history.length === 1 ? 'y' : 'ies'}. Saved data stays on this device and isn’t encrypted by apiVU.</p></div>
+          <div className="inline-actions">
+            <button className="button button-secondary" type="button" onClick={() => void handleClearHistory()} disabled={history.length === 0}>Clear history</button>
+            <button className="button button-danger" type="button" onClick={() => void handleClear()} disabled={collections.length === 0}><Trash2 size={15} /> Clear collections</button>
+          </div>
+        </div>
+      </section>
+    </>
+  );
+
   return (
-    <main className="app-shell" data-theme={theme}>
-      <header className="topbar">
+    <div className={`app-shell ${isTabView ? 'is-tab' : ''}`} data-theme={theme}>
+      <header className="app-header">
         <div className="brand-lockup">
-          <span className="brand-mark"><Braces size={17} strokeWidth={2.3} /></span>
+          <img className="brand-mark" src="/icons/128.png" alt="" width={30} height={30} />
           <div>
             <p className="brand-name">apiVU</p>
             <p className="brand-caption">LOCAL API WORKSPACE</p>
           </div>
         </div>
-        <div className="topbar-actions">
-          <button
-            className={`theme-switch ${theme}`}
-            type="button"
-            role="switch"
-            aria-checked={theme === 'dark'}
-            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-            title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-            onClick={toggleTheme}
-          >
-            <Sun className="theme-icon sun-icon" size={14} />
-            <span className="theme-thumb" />
-            <Moon className="theme-icon moon-icon" size={13} />
+        <div className="header-actions">
+          <button className="icon-button" type="button" title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} onClick={() => changeThemePreference(theme === 'dark' ? 'light' : 'dark')}>
+            {theme === 'dark' ? <Moon size={17} /> : <Sun size={17} />}
           </button>
-          <button className={`icon-button ${savedOpen ? 'is-active' : ''}`} type="button" title="Saved requests" aria-label="Saved requests" onClick={() => setSavedOpen((open) => !open)}>
+          <button className="icon-button" type="button" title={isTabView ? 'Back to side panel' : 'Open in full window'} aria-label={isTabView ? 'Back to side panel' : 'Open in full window'} onClick={() => void toggleViewMode()}>
+            {isTabView ? <PanelRight size={17} /> : <Maximize2 size={17} />}
+          </button>
+          <button className={`icon-button ${view === 'collections' ? 'is-active' : ''}`} type="button" title="Collections" aria-label="Collections" onClick={() => setView('collections')}>
             <FolderOpen size={17} />
           </button>
-          <button className="icon-button" type="button" title="Export collection" aria-label="Export collection" onClick={handleExport} disabled={collections.length === 0}>
+          <button className="icon-button" type="button" title="Export collections" aria-label="Export collections" onClick={handleExport} disabled={collections.length === 0}>
             <Download size={17} />
           </button>
         </div>
       </header>
 
-      {savedOpen && (
-        <section className="saved-panel" aria-label="Saved requests">
-          <div className="section-heading">
-            <div><p className="eyebrow">YOUR WORKSPACE</p><h2>Saved requests</h2></div>
-            <button className="icon-button" type="button" aria-label="Close saved requests" onClick={() => setSavedOpen(false)}><X size={16} /></button>
-          </div>
-          {collections.length === 0 ? <p className="empty-note">Saved requests will appear here.</p> : collections.map((collection) => (
-            <div className="saved-collection" key={collection.id}>
-              <p className="collection-label">{collection.name}</p>
-              {collection.requests.map((savedRequest) => (
-                <div className="saved-row" key={savedRequest.id}>
-                  <button className="saved-request" type="button" onClick={() => loadSaved(savedRequest, collection.name)}>
-                    <span className={`method-pill method-${savedRequest.method.toLowerCase()}`}>{savedRequest.method}</span>
-                    <span className="saved-request-name">{savedRequest.name}</span>
-                  </button>
-                  <button className="icon-button danger-button" type="button" title={`Delete ${savedRequest.name}`} aria-label={`Delete ${savedRequest.name}`} onClick={() => void handleDelete(savedRequest.id)}><Trash2 size={15} /></button>
-                </div>
-              ))}
-            </div>
-          ))}
-          <div className="export-controls">
-            <label className="check-row export-secret"><input type="checkbox" checked={includeSecrets} onChange={(event) => setIncludeSecrets(event.target.checked)} /><span>Include secrets in export</span></label>
-            <p>Request bodies are included and may contain secrets.</p>
-            <button className="secondary-button export-button" type="button" onClick={handleExport} disabled={collections.length === 0}><Download size={14} /> Export JSON</button>
-            <button className="secondary-button clear-button" type="button" onClick={() => void handleClear()} disabled={collections.length === 0}><Trash2 size={14} /> Clear local data</button>
-          </div>
-        </section>
-      )}
-
-      <section className="workspace">
-        <div className="page-heading">
-          <div>
-            <p className="eyebrow">REQUEST BUILDER</p>
-            <h1>{showParser ? 'Start with cURL' : 'Review request'}</h1>
-          </div>
-          {!showParser && <button className="secondary-button create-new-button" type="button" onClick={() => setShowParser(true)}><Plus size={14} /> Create New</button>}
-        </div>
-
-        {showParser && (
-          <section className="import-surface">
-            <label className="field-label" htmlFor="curl-input">Paste cURL</label>
-            <textarea
-              id="curl-input"
-              className="curl-input code-input"
-              value={rawCurl}
-              onChange={(event) => setRawCurl(event.target.value)}
-              onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') handleParse(); }}
-              placeholder={'curl \'https://api.example.com/v1/users?active=true\' \\\n+  -H \'Authorization: Bearer your-token\' \\\n+  -H \'Content-Type: application/json\' \\\n+  -d \'{"name":"Ada"}\''}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-            />
-            <div className="import-footer">
-              <span className="privacy-note">Parsed on this device. Nothing is uploaded.</span>
-              <button className="primary-button" type="button" onClick={handleParse} disabled={!rawCurl.trim()}>
-                Create
+      <div className="app-body">
+        <nav className="sidebar" aria-label="Workspace">
+          <ul className="nav-list">
+            {navItems.map((item) => (
+              <li key={item.view}>
+                <button type="button" className="nav-item" aria-current={view === item.view ? 'page' : undefined} title={item.label} onClick={() => setView(item.view)}>
+                  {item.icon}<span className="nav-label">{item.label}</span>
+                  {item.view === 'collections' && savedCount > 0 && <span className="nav-count">{savedCount}</span>}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="nav-divider" />
+          <ul className="nav-list">
+            <li>
+              <button type="button" className="nav-item" aria-current={view === 'settings' ? 'page' : undefined} title="Settings" onClick={() => setView('settings')}>
+                <Settings size={17} strokeWidth={1.85} /><span className="nav-label">Settings</span>
               </button>
-            </div>
-            {parseErrors.map((error) => <p className="inline-error" key={error}><AlertTriangle size={14} />{error}</p>)}
-            {parseWarnings.map((warning) => <p className="inline-warning" key={warning}><AlertTriangle size={14} />{warning}</p>)}
-          </section>
-        )}
+            </li>
+          </ul>
+        </nav>
 
-        {request && !showParser && (
-          <>
-            <section className="request-bar" aria-label="Request method and URL">
-              <select className="method-select" value={request.method} onChange={(event) => updateRequest({ method: event.target.value })} aria-label="HTTP method">
-                {['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].map((method) => <option key={method}>{method}</option>)}
-              </select>
-              <input className="url-input" value={visibleUrl} onFocus={() => setUrlFocused(true)} onBlur={() => setUrlFocused(false)} onChange={(event) => updateRequest({ url: event.target.value })} aria-label="Request URL" placeholder="https://api.example.com/path" />
-            </section>
-            {parseWarnings.map((warning) => <p className="inline-warning" key={warning}><AlertTriangle size={14} />{warning}</p>)}
+        <main className="workspace">
+          <div className="workspace-inner">
+            {view === 'requests' && renderRequests()}
+            {view === 'collections' && renderCollections()}
+            {view === 'history' && renderHistory()}
+            {view === 'environments' && renderEnvironments()}
+            {view === 'settings' && renderSettings()}
+          </div>
+        </main>
+      </div>
 
-            <section className="request-details">
-              <nav className="request-tabs" aria-label="Request settings" role="tablist">
-                {tabs.map((tab) => <button key={tab} type="button" role="tab" aria-selected={activeTab === tab} className={`request-tab ${activeTab === tab ? 'selected' : ''}`} onClick={() => setActiveTab(tab)}>{tab}{tab === 'Headers' && request.headers.length > 0 ? <span className="tab-count">{request.headers.length}</span> : null}</button>)}
-              </nav>
-              <div className="tab-content">
-                {activeTab === 'Params' && (
-                  <>
-                    <div className="table-heading"><span>KEY</span><span>VALUE</span><span /></div>
-                    {queryPairs.map(([key, value], index) => <div className="pair-row" key={`${index}-${key}`}>
-                      <input value={key} aria-label={`Parameter ${index + 1} key`} placeholder="key" onChange={(event) => updateQueryPair(index, event.target.value, value)} />
-                      <input type={showSecrets || !secretField.test(key) ? 'text' : 'password'} value={value} aria-label={`Parameter ${index + 1} value`} placeholder="value" onChange={(event) => updateQueryPair(index, key, event.target.value)} />
-                      <button className="icon-button row-remove" type="button" aria-label={`Remove parameter ${index + 1}`} onClick={() => {
-                        if (!request) return;
-                        const nextUrl = new URL(request.url);
-                        const pairs = Array.from(nextUrl.searchParams.entries()).filter((_, rowIndex) => rowIndex !== index);
-                        nextUrl.search = '';
-                        pairs.forEach(([pairKey, pairValue]) => nextUrl.searchParams.append(pairKey, pairValue));
-                        updateRequest({ url: nextUrl.toString() });
-                      }}><X size={14} /></button>
-                    </div>)}
-                    {queryPairs.length === 0 && <p className="empty-note">No query parameters</p>}
-                    {queryPairs.some(([key]) => secretField.test(key)) && <button className="text-button reveal-button" type="button" onClick={() => setShowSecrets((visible) => !visible)}>{showSecrets ? <EyeOff size={14} /> : <Eye size={14} />}{showSecrets ? ' Hide secret values' : ' Reveal secret values'}</button>}
-                    <button className="add-row" type="button" onClick={addQueryPair}><Plus size={14} /> Add parameter</button>
-                  </>
-                )}
-                {activeTab === 'Headers' && (
-                  <>
-                    <div className="table-heading"><span>HEADER</span><span>VALUE</span><span /></div>
-                    {request.headers.map((header, index) => <div className="pair-row" key={index}>
-                      <input value={header.name} aria-label={`Header ${index + 1} name`} placeholder="Header name" onChange={(event) => updatePair('headers', index, 'name', event.target.value)} />
-                      <input value={header.value} aria-label={`Header ${index + 1} value`} placeholder="Value" onChange={(event) => updatePair('headers', index, 'value', event.target.value)} />
-                      <button className="icon-button row-remove" type="button" aria-label={`Remove header ${index + 1}`} onClick={() => removePair('headers', index)}><X size={14} /></button>
-                    </div>)}
-                    {request.headers.length === 0 && <p className="empty-note">No headers added</p>}
-                    <button className="add-row" type="button" onClick={() => addPair('headers')}><Plus size={14} /> Add header</button>
-                  </>
-                )}
-                {activeTab === 'Auth' && (
-                  <div className="auth-form">
-                    <label className="field-label" htmlFor="auth-type">AUTH TYPE</label>
-                    <select id="auth-type" className="select-input" value={request.auth.type} onChange={(event) => updateRequest({ auth: { ...request.auth, type: event.target.value as ApiRequest['auth']['type'] } })}>
-                      <option value="none">No auth</option><option value="bearer">Bearer token</option><option value="basic">Basic auth</option>
-                    </select>
-                    {request.auth.type === 'bearer' && <label className="field-label" htmlFor="bearer-token">TOKEN<input id="bearer-token" type={showSecrets ? 'text' : 'password'} autoComplete="off" value={request.auth.token} onChange={(event) => updateRequest({ auth: { ...request.auth, token: event.target.value } })} placeholder="Paste token" /></label>}
-                    {request.auth.type === 'basic' && <>
-                      <label className="field-label" htmlFor="basic-user">USERNAME<input id="basic-user" autoComplete="off" value={request.auth.username} onChange={(event) => updateRequest({ auth: { ...request.auth, username: event.target.value } })} placeholder="Username" /></label>
-                      <label className="field-label" htmlFor="basic-password">PASSWORD<input id="basic-password" type={showSecrets ? 'text' : 'password'} autoComplete="new-password" value={request.auth.password} onChange={(event) => updateRequest({ auth: { ...request.auth, password: event.target.value } })} placeholder="Password" /></label>
-                    </>}
-                    <button className="text-button reveal-button" type="button" onClick={() => setShowSecrets((visible) => !visible)}>{showSecrets ? <EyeOff size={14} /> : <Eye size={14} />}{showSecrets ? ' Hide secrets' : ' Reveal secrets'}</button>
-                  </div>
-                )}
-                {activeTab === 'Cookies' && (
-                  <>
-                    <div className="cookie-note"><AlertTriangle size={15} /><p>Chrome blocks manually setting the Cookie header. Values are saved for reference, not replayed.</p></div>
-                    <button className="text-button reveal-button" type="button" onClick={() => setShowSecrets((visible) => !visible)}>{showSecrets ? <EyeOff size={14} /> : <Eye size={14} />}{showSecrets ? ' Hide cookie values' : ' Reveal cookie values'}</button>
-                    <div className="table-heading"><span>COOKIE</span><span>VALUE</span><span /></div>
-                    {request.cookies.map((cookie, index) => <div className="pair-row" key={index}>
-                      <input value={cookie.name} aria-label={`Cookie ${index + 1} name`} placeholder="Name" onChange={(event) => updatePair('cookies', index, 'name', event.target.value)} />
-                      <input value={cookie.value} type={showSecrets ? 'text' : 'password'} aria-label={`Cookie ${index + 1} value`} placeholder="Value" onChange={(event) => updatePair('cookies', index, 'value', event.target.value)} />
-                      <button className="icon-button row-remove" type="button" aria-label={`Remove cookie ${index + 1}`} onClick={() => removePair('cookies', index)}><X size={14} /></button>
-                    </div>)}
-                    {request.cookies.length === 0 && <p className="empty-note">No pasted cookies</p>}
-                    <button className="add-row" type="button" onClick={() => addPair('cookies')}><Plus size={14} /> Add cookie</button>
-                    <label className="check-row"><input type="checkbox" checked={includeBrowserCookies} onChange={(event) => setIncludeBrowserCookies(event.target.checked)} /><span>Include browser-managed cookies for this host</span></label>
-                  </>
-                )}
-                {activeTab === 'Body' && <>
-                  <div className="body-heading"><span className="field-label">REQUEST BODY</span><span className="body-format">Raw</span></div>
-                  <textarea className="body-input code-input" value={request.body} onChange={(event) => updateRequest({ body: event.target.value })} placeholder="Request body" spellCheck={false} />
-                </>}
-              </div>
-            </section>
+      <footer className="status-bar">
+        <span className="status-left"><span className="status-dot" aria-hidden="true" />apiVU {version}<span className="status-extra"> · Local only, nothing is uploaded</span></span>
+        <span className="status-right">
+          <span className="credit">Compiled with conviction <Rocket className="credit-icon" size={13} aria-label="rocket" /> by <a href="https://rajendrakhope.com" target="_blank" rel="noreferrer">Rajendra</a></span>
+          <a className="status-link" href="https://github.com/bkrajendra/apivu" target="_blank" rel="noreferrer" title="apiVU on GitHub"><Github size={13} aria-hidden="true" /><span>GitHub</span></a>
+        </span>
+      </footer>
 
-            <section className="save-row">
-              <label className="field-label request-name-label" htmlFor="request-name">REQUEST NAME<input id="request-name" value={request.name} onChange={(event) => updateRequest({ name: event.target.value })} /></label>
-              <label className="field-label collection-name-label" htmlFor="collection-name">COLLECTION<input id="collection-name" value={collectionName} onChange={(event) => setCollectionName(event.target.value)} /></label>
-              <button className="secondary-button save-button" type="button" onClick={() => void handleSave()} title="Save request locally"><Save size={15} /><span>Save</span></button>
-            </section>
-
-            <div className="send-row">
-              <span className="permission-caption">Permission requested for this host only</span>
-              <button className="primary-button send-button" type="button" onClick={() => void handleSend()} disabled={sending}>
-                {sending ? <><span className="spinner" /> Sending</> : <><Send size={15} /> Send</>}
-              </button>
-            </div>
-
-            {sendError && <p className="inline-error"><AlertTriangle size={14} />{sendError}</p>}
-            {sendWarnings.map((warning) => <p className="inline-warning" key={warning}><AlertTriangle size={14} />{warning}</p>)}
-
-            {responseData && (
-              <section className="response-section">
-                <div className="response-heading">
-                  <div className="response-title"><p className="eyebrow">RESPONSE</p><span className={`status-code ${responseData.status < 400 ? 'status-good' : 'status-bad'}`}>{responseData.status} {responseData.statusText}</span></div>
-                  <span className="response-time">{responseData.elapsed} ms</span>
-                </div>
-                <div className="response-tabs"><span>Body</span><span>{responseData.headers.length} headers</span><div className="response-mode"><button type="button" className={responseMode === 'Pretty' ? 'active' : ''} onClick={() => setResponseMode('Pretty')}>Pretty</button><button type="button" className={responseMode === 'Raw' ? 'active' : ''} onClick={() => setResponseMode('Raw')}>Raw</button></div></div>
-                <pre className="response-body">{responseData.truncated ? `${responseMode === 'Pretty' ? prettyBody : responseData.body}\n\n[Response truncated at 1 MB]` : responseMode === 'Pretty' ? prettyBody : responseData.body || 'Empty response body'}</pre>
-                {responseData.headers.length > 0 && <details className="response-headers"><summary>Response headers</summary>{responseData.headers.map((header) => <div className="response-header" key={header.name}><span>{header.name}</span><code>{header.value}</code></div>)}</details>}
-              </section>
-            )}
-          </>
-        )}
-      </section>
-
-      {notice && <div className="toast" role="status"><Check size={14} />{notice}<button type="button" aria-label="Dismiss notice" onClick={() => setNotice('')}><X size={13} /></button></div>}
-
-      <footer className="app-footer"><span>Made with ❤️ by <a href="https://rajendrakhope.com" target="_blank" rel="noreferrer">Rajendra</a></span><span>Apivu 0.1</span></footer>
-    </main>
+      {notice && <div className="toast" role="status"><Check size={15} />{notice}<button type="button" aria-label="Dismiss notice" onClick={() => setNotice('')}><X size={14} /></button></div>}
+    </div>
   );
 }
 

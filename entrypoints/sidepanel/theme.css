@@ -1,0 +1,130 @@
+/* Inter is bundled with the extension (Latin subset only) so no font request ever leaves the device. */
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('../../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2') format('woff2-variations');
+}
+
+/* apiVU Design System (copied from docs/apivu-branding/apiVU-theme.css): semantic theme tokens and starter component styles.
+   Apply data-theme="light" or data-theme="dark" to the <html> or app root.
+   Light mode intentionally uses white / pale surfaces only; dark mode uses charcoal surfaces. */
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --apivu-blue: #007AFF;
+  --apivu-blue-hover: #005FD6;
+  --apivu-blue-pressed: #004FB8;
+  --apivu-blue-soft: #EAF3FF;
+  --apivu-focus-ring: #80B5FF;
+
+  --apivu-bg: #F7F9FC;
+  --apivu-surface: #FFFFFF;
+  --apivu-surface-raised: #FFFFFF;
+  --apivu-surface-hover: #F2F6FA;
+  --apivu-surface-selected: #EAF3FF;
+  --apivu-border: #E3E8EF;
+  --apivu-border-strong: #CBD5E1;
+
+  --apivu-text: #172033;
+  --apivu-text-secondary: #64748B;
+  --apivu-text-muted: #8B98A9;
+  --apivu-text-on-accent: #FFFFFF;
+
+  --apivu-success: #16834A;
+  --apivu-success-soft: #E8F7EE;
+  --apivu-warning: #B96B05;
+  --apivu-warning-soft: #FFF4DB;
+  --apivu-danger: #D9363E;
+  --apivu-danger-soft: #FDEBEC;
+  --apivu-info: #2167D5;
+  --apivu-info-soft: #EAF2FF;
+  --apivu-purple: #7651D6;
+  --apivu-teal: #0D9488;
+
+  --apivu-code-bg: #FFFFFF;
+  --apivu-code-gutter: #F8FAFC;
+  --apivu-code-key: #175CD3;
+  --apivu-code-string: #218345;
+  --apivu-code-number: #B45309;
+  --apivu-code-boolean: #7651D6;
+  --apivu-code-comment: #8B98A9;
+
+  --apivu-shadow-sm: 0 1px 2px rgb(15 23 42 / 4%);
+  --apivu-shadow-md: 0 8px 24px rgb(15 23 42 / 7%);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --apivu-blue: #0A84FF;
+  --apivu-blue-hover: #2997FF;
+  --apivu-blue-pressed: #0066CC;
+  --apivu-blue-soft: #152B43;
+  --apivu-focus-ring: #2997FF;
+
+  --apivu-bg: #0D1117;
+  --apivu-surface: #151B23;
+  --apivu-surface-raised: #1B2430;
+  --apivu-surface-hover: #202B38;
+  --apivu-surface-selected: #152B43;
+  --apivu-border: #2A3442;
+  --apivu-border-strong: #3B4758;
+
+  --apivu-text: #F3F6FA;
+  --apivu-text-secondary: #A3AFBF;
+  --apivu-text-muted: #748195;
+  --apivu-text-on-accent: #FFFFFF;
+
+  --apivu-success: #3CCB7F;
+  --apivu-success-soft: #153528;
+  --apivu-warning: #F5B94C;
+  --apivu-warning-soft: #3A2D16;
+  --apivu-danger: #FF6B72;
+  --apivu-danger-soft: #3D2026;
+  --apivu-info: #79B8FF;
+  --apivu-info-soft: #152B43;
+  --apivu-purple: #B39BFF;
+  --apivu-teal: #4FD1C5;
+
+  --apivu-code-bg: #10161E;
+  --apivu-code-gutter: #10161E;
+  --apivu-code-key: #79B8FF;
+  --apivu-code-string: #7EE787;
+  --apivu-code-number: #F2CC60;
+  --apivu-code-boolean: #D2A8FF;
+  --apivu-code-comment: #748195;
+
+  --apivu-shadow-sm: 0 1px 2px rgb(0 0 0 / 22%);
+  --apivu-shadow-md: 0 8px 24px rgb(0 0 0 / 28%);
+}
+
+:root {
+  --apivu-font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --apivu-font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  --apivu-space-1: 4px;
+  --apivu-space-2: 8px;
+  --apivu-space-3: 12px;
+  --apivu-space-4: 16px;
+  --apivu-space-5: 20px;
+  --apivu-space-6: 24px;
+  --apivu-space-8: 32px;
+  --apivu-space-10: 40px;
+  --apivu-space-12: 48px;
+
+  --apivu-radius-sm: 6px;
+  --apivu-radius-md: 9px;
+  --apivu-radius-lg: 12px;
+  --apivu-radius-xl: 16px;
+  --apivu-radius-pill: 999px;
+
+  --apivu-control-height-sm: 32px;
+  --apivu-control-height-md: 38px;
+  --apivu-control-height-lg: 44px;
+  --apivu-sidebar-width: 208px;
+  --apivu-header-height: 56px;
+  --apivu-transition-fast: 120ms ease;
+  --apivu-transition-standard: 180ms ease;
+}
