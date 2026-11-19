@@ -166,7 +166,7 @@ jobs:
     env:
       TAG_NAME: ${{ needs.verify.outputs.tag || github.ref_name }}
       EDGE_PRODUCT_ID: ${{ vars.EDGE_PRODUCT_ID }}
-      EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
+      EDGE_CLIENT_ID: ${{ vars.EDGE_CLIENT_ID }}
       EDGE_API_KEY: ${{ secrets.EDGE_API_KEY }}
     steps:
       - uses: actions/checkout@v7
@@ -188,6 +188,9 @@ jobs:
       - name: Upload to Microsoft Edge Add-ons
         run: |
           set -euo pipefail
+          for NAME in EDGE_PRODUCT_ID EDGE_CLIENT_ID EDGE_API_KEY; do
+            [ -n "${!NAME}" ] || { echo "::error::$NAME is empty. EDGE_PRODUCT_ID and EDGE_CLIENT_ID are repository variables, EDGE_API_KEY is a repository secret."; exit 1; }
+          done
           API="https://api.addons.microsoftedge.microsoft.com/v1/products/$EDGE_PRODUCT_ID"
           AUTH=(-H "Authorization: ApiKey $EDGE_API_KEY" -H "X-ClientID: $EDGE_CLIENT_ID")
 
@@ -205,16 +208,23 @@ jobs:
             done
             return 1
           }
-          operation_id() { tr -d '\r' | awk -F': ' 'tolower($1)=="location"{print $2}' | sed 's#.*/##'; }
+          # POSTs and prints the operation id from the Location header; on a non-2xx response prints the status and body.
+          submit() {
+            local url="$1"; shift
+            local code
+            code=$(curl -sS -o response.txt -D headers.txt -w '%{http_code}' -X POST "${AUTH[@]}" "$@" "$url")
+            if [ "${code:0:1}" != "2" ]; then
+              echo "::error::Edge API returned HTTP $code for POST $url" >&2
+              cat response.txt >&2
+              return 1
+            fi
+            tr -d '\r' < headers.txt | awk -F': ' 'tolower($1)=="location"{print $2}' | sed 's#.*/##'
+          }
 
-          OP=$(curl -fsS -D - -o /dev/null -X POST "${AUTH[@]}" \
-            -H "Content-Type: application/zip" --data-binary "@$ZIP" \
-            "$API/submissions/draft/package" | operation_id)
+          OP=$(submit "$API/submissions/draft/package" -H "Content-Type: application/zip" --data-binary "@$ZIP")
           [ -n "$OP" ] || { echo "::error::No operation id returned for upload"; exit 1; }
           poll "$API/submissions/draft/package/operations/$OP" || { echo "::error::Upload did not succeed"; exit 1; }
 
-          OP=$(curl -fsS -D - -o /dev/null -X POST "${AUTH[@]}" \
-            -H "Content-Type: application/json" -d "{\"notes\": \"Release $TAG_NAME\"}" \
-            "$API/submissions" | operation_id)
+          OP=$(submit "$API/submissions" -H "Content-Type: application/json" -d "{\"notes\": \"Release $TAG_NAME\"}")
           [ -n "$OP" ] || { echo "::error::No operation id returned for publish"; exit 1; }
           poll "$API/submissions/operations/$OP" || { echo "::error::Submission did not succeed"; exit 1; }
