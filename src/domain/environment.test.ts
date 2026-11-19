@@ -73,3 +73,12 @@ describe('percent-encoded placeholders in urls', () => {
     expect(resolveRequest(request, env).request.url).toBe('https://a.com/x?t=abc&u=abc');
   });
 });
+
+describe('resolveRequest with graphql', () => {
+  it('resolves variables inside the query and variables text', () => {
+    const request = { ...createRequest(), bodyMode: 'graphql' as const, graphql: { query: '{ user(token: "{{token}}") }', variables: '{"base":"{{baseUrl}}","m":"{{missing}}"}' } };
+    const { request: out, missing } = resolveRequest(request, env);
+    expect(out.graphql).toEqual({ query: '{ user(token: "abc") }', variables: '{"base":"https://dev.example.com","m":"{{missing}}"}' });
+    expect(missing).toEqual(['missing']);
+  });
+});

@@ -15,6 +15,7 @@ import {
   Moon,
   PanelRight,
   Rocket,
+  Pencil,
   Plus,
   Save,
   Send,
@@ -28,6 +29,7 @@ import { JsonEditor, type ThemeConfig } from 'modern-json-react';
 import 'modern-json-react/styles.css';
 import { parseCurl } from '../../src/domain/parse-curl';
 import { createEnvironment, createVariable, lookupVariable, resolveRequest, type Environment, type EnvVariable } from '../../src/domain/environment';
+import { applyGraphql, createGraphqlBody } from '../../src/domain/graphql';
 import { toResponseView, toStoredResponse, type ResponseView } from '../../src/domain/response';
 import { VarInput } from './VarInput';
 import { isPostmanEnvironment, parsePostman, parsePostmanEnvironment } from '../../src/domain/parse-postman';
@@ -215,6 +217,40 @@ function EmptyState({ icon, title, children }: { icon: ReactNode; title: string;
       <h2>{title}</h2>
       <p>{children}</p>
     </div>
+  );
+}
+
+function InlineEdit({ value, onChange, label, placeholder, className, icon, list }: { value: string; onChange: (value: string) => void; label: string; placeholder: string; className?: string; icon?: ReactNode; list?: string }) {
+  const [editing, setEditing] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (editing) inputRef.current?.select();
+  }, [editing]);
+  if (editing) {
+    return (
+      <span className={`inline-edit is-editing ${className ?? ''}`}>
+        {icon}
+        <input
+          ref={inputRef}
+          className="inline-edit-input"
+          value={value}
+          list={list}
+          aria-label={label}
+          placeholder={placeholder}
+          spellCheck={false}
+          onChange={(event) => onChange(event.target.value)}
+          onBlur={() => setEditing(false)}
+          onKeyDown={(event) => { if (event.key === 'Enter' || event.key === 'Escape') setEditing(false); }}
+        />
+      </span>
+    );
+  }
+  return (
+    <button type="button" className={`inline-edit ${className ?? ''}`} onClick={() => setEditing(true)} title={`Edit ${label.toLowerCase()}`} aria-label={`${label}: ${value || placeholder}. Edit`}>
+      {icon}
+      <span className="inline-edit-text">{value.trim() || placeholder}</span>
+      <Pencil className="inline-edit-pencil" size={14} aria-hidden="true" />
+    </button>
   );
 }
 
@@ -425,8 +461,14 @@ function App() {
     setSendWarnings([]);
     setResponseData(null);
 
-    const { request: resolvedRequest, missing } = resolveRequest(request, activeEnvironment);
-    const usesVariables = JSON.stringify(resolvedRequest) !== JSON.stringify(request);
+    const { request: substituted, missing } = resolveRequest(request, activeEnvironment);
+    const usesVariables = JSON.stringify(substituted) !== JSON.stringify(request);
+    const graphqlResult = applyGraphql(substituted);
+    if ('error' in graphqlResult) {
+      setSendError(graphqlResult.error);
+      return;
+    }
+    const resolvedRequest = graphqlResult.request;
 
     let target: URL;
     try {
@@ -691,6 +733,7 @@ function App() {
   );
   const selectedExample = request?.examples?.find((example) => example.id === exampleView);
   const shownResponse = useMemo<ResponseView | null>(() => (selectedExample ? toResponseView(selectedExample) : responseData), [selectedExample, responseData]);
+  const hasStoredResponses = Boolean(request?.lastResponse) || (request?.examples?.length ?? 0) > 0;
   const lookupVar = (name: string) => lookupVariable(activeEnvironment, name);
 
   const responseIsJson = useMemo(
@@ -716,12 +759,23 @@ function App() {
 
   const renderRequests = () => (
     <>
-      <div className="page-heading">
-        <div>
+      <div className="page-heading request-heading">
+        <div className="request-title">
           <p className="eyebrow">Request builder</p>
-          <h1>{showParser || !request ? 'Start with cURL' : 'Review request'}</h1>
+          {showParser || !request ? <h1>Start with cURL</h1> : (
+            <>
+              <h1><InlineEdit className="inline-edit-title" label="Request name" placeholder="Untitled request" value={request.name} onChange={(name) => updateRequest({ name })} /></h1>
+              <InlineEdit className="inline-edit-sub" label="Collection" placeholder="My collection" value={collectionName} list="collection-options" icon={<FolderOpen size={14} aria-hidden="true" />} onChange={setCollectionName} />
+              <datalist id="collection-options">{collections.map((collection) => <option key={collection.id} value={collection.name} />)}</datalist>
+            </>
+          )}
         </div>
-        {!showParser && request && <button className="button button-secondary" type="button" onClick={startNew}><Plus size={15} /> Create New</button>}
+        {!showParser && request && (
+          <div className="heading-actions">
+            <button className="button button-secondary" type="button" onClick={startNew}><Plus size={15} /> Create New</button>
+            <button className="button button-primary" type="button" onClick={() => void handleSave()} title="Save request locally"><Save size={15} /> Save</button>
+          </div>
+        )}
         {showParser && request && <button className="button button-ghost" type="button" onClick={() => setShowParser(false)}>Back to request</button>}
       </div>
 
@@ -752,12 +806,17 @@ function App() {
 
       {request && !showParser && (
         <>
-          <label className="env-bar"><Layers size={14} aria-hidden="true" /><span>Environment</span>
+          <section className="card request-card" aria-label="Request">
+          <div className="request-head">
+            <span className="section-title">Request</span>
+            <label className="env-bar"><Layers size={14} aria-hidden="true" /><span>Environment</span>
             <select className="input select env-select" value={activeEnvId ?? ''} onChange={(event) => persistEnvironments(environments, event.target.value || null)} aria-label="Active environment">
               <option value="">No environment</option>
               {environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}
             </select>
           </label>
+          </div>
+          <div className="request-main">
           <div className="url-row">
             <div className="url-field">
               <select className={`method-select ${methodClass(request.method)}`} value={request.method} onChange={(event) => updateRequest({ method: event.target.value })} aria-label="HTTP method">
@@ -772,6 +831,7 @@ function App() {
           </div>
           <p className="caption url-caption">Chrome asks for access to this host only, the first time you send to it.</p>
           {sendError && <p className="inline-error" role="alert"><AlertTriangle size={14} />{sendError}</p>}
+          </div>
 
           <nav className="tab-list" aria-label="Request settings" role="tablist">
             {tabs.map((tab) => (
@@ -852,42 +912,48 @@ function App() {
             {activeTab === 'Body' && (
               <>
                 <div className="body-heading">
-                  <span className="field-label">Request body</span>
-                  <SegmentedControl label="Body format" value={effectiveBodyView} options={[{ value: 'json', label: 'JSON' }, { value: 'raw', label: 'Raw' }]} onChange={setBodyView} />
+                  <SegmentedControl label="Body type" value={request.bodyMode ?? 'raw'} options={[{ value: 'raw', label: 'Raw' }, { value: 'graphql', label: 'GraphQL' }]} onChange={(bodyMode) => updateRequest({ bodyMode, ...(bodyMode === 'graphql' && !request.graphql ? { graphql: createGraphqlBody() } : {}), ...(bodyMode === 'graphql' && request.method === 'GET' ? { method: 'POST' } : {}) })} />
+                  {request.bodyMode !== 'graphql' && <SegmentedControl label="Body format" value={effectiveBodyView} options={[{ value: 'json', label: 'JSON' }, { value: 'raw', label: 'Raw' }]} onChange={setBodyView} />}
                 </div>
-                {effectiveBodyView === 'json'
+                {request.bodyMode === 'graphql' ? (
+                  <div className="graphql-fields">
+                    <label className="field-label" htmlFor="graphql-query">Query
+                      <textarea id="graphql-query" className="input code-text body-input graphql-query" value={request.graphql?.query ?? ''} onChange={(event) => updateRequest({ graphql: { ...createGraphqlBody(), ...request.graphql, query: event.target.value } })} placeholder={'query GetUser($id: ID!) {\n  user(id: $id) {\n    name\n  }\n}'} spellCheck={false} autoCapitalize="off" autoCorrect="off" />
+                    </label>
+                    <label className="field-label" htmlFor="graphql-variables">Variables (JSON)
+                      <textarea id="graphql-variables" className="input code-text body-input graphql-variables" value={request.graphql?.variables ?? ''} onChange={(event) => updateRequest({ graphql: { ...createGraphqlBody(), ...request.graphql, variables: event.target.value } })} placeholder={'{\n  "id": "1"\n}'} spellCheck={false} autoCapitalize="off" autoCorrect="off" />
+                    </label>
+                    <p className="caption">Sent as a JSON body with <code>query</code> and <code>variables</code> (switching to GraphQL changes GET to POST). Use <code>{'{{variables}}'}</code> from your environment in either field.</p>
+                  </div>
+                ) : effectiveBodyView === 'json'
                   ? <JsonEditor className="json-field" value={bodySeed} theme={editorThemes[theme]} height={isTabView ? 420 : 300} mode={bodyEditorMode} onModeChange={setBodyEditorMode} indentation={2} onChange={(_value, rawText) => { setBodyView('json'); updateRequest({ body: rawText }); }} />
                   : <textarea className="input code-text body-input" value={request.body} onChange={(event) => updateRequest({ body: event.target.value })} placeholder="Request body" spellCheck={false} />}
               </>
             )}
           </div>
+          </section>
 
-          <div className="save-row">
-            <label className="field-label" htmlFor="request-name">Request name<input id="request-name" className="input" value={request.name} onChange={(event) => updateRequest({ name: event.target.value })} /></label>
-            <label className="field-label" htmlFor="collection-name">Collection<input id="collection-name" className="input" list="collection-options" value={collectionName} onChange={(event) => setCollectionName(event.target.value)} /></label>
-            <datalist id="collection-options">{collections.map((collection) => <option key={collection.id} value={collection.name} />)}</datalist>
-            <button className="button button-secondary save-button" type="button" onClick={() => void handleSave()} title="Save request locally"><Save size={15} /> Save</button>
-          </div>
-
-          {(request.lastResponse || (request.examples?.length ?? 0) > 0) && (
+          {(shownResponse || hasStoredResponses) && (
+            <section className="card response-card" aria-label="Response">
+              <div className="response-meta">
+                <span className="section-title">Response</span>
+                {shownResponse && <>
+                <span className={`status-pill ${shownResponse.status < 300 ? 'is-success' : shownResponse.status < 400 ? 'is-info' : 'is-error'}`}>
+                  {shownResponse.status < 400 ? <Check size={13} /> : <AlertTriangle size={13} />}{shownResponse.status} {shownResponse.statusText}
+                </span>
+                {shownResponse.elapsed !== null && <span className="caption">{shownResponse.elapsed} ms</span>}
+                <span className="caption">{formatBytes(shownResponse.body)}{shownResponse.truncated ? ' (truncated)' : ''}</span>
+                </>}
+            {hasStoredResponses && (
             <label className="response-picker"><span>Saved response</span>
               <select className="input select" value={selectedExample ? selectedExample.id : ''} onChange={(event) => setExampleView(event.target.value)} aria-label="Saved response to view">
                 <option value="">{responseData ? 'Latest response' : 'No response shown'}</option>
                 {(request.examples ?? []).map((example) => <option key={example.id} value={example.id}>Example: {example.name}</option>)}
               </select>
             </label>
-          )}
-
-          {shownResponse && (
-            <section className="card response-card" aria-label="Response">
-              <div className="response-meta">
-                <span className="section-title">Response</span>
-                <span className={`status-pill ${shownResponse.status < 300 ? 'is-success' : shownResponse.status < 400 ? 'is-info' : 'is-error'}`}>
-                  {shownResponse.status < 400 ? <Check size={13} /> : <AlertTriangle size={13} />}{shownResponse.status} {shownResponse.statusText}
-                </span>
-                {shownResponse.elapsed !== null && <span className="caption">{shownResponse.elapsed} ms</span>}
-                <span className="caption">{formatBytes(shownResponse.body)}{shownResponse.truncated ? ' (truncated)' : ''}</span>
+            )}
               </div>
+              {shownResponse && <>
               <div className="response-toolbar">
                 <nav className="tab-list tab-list-compact" role="tablist" aria-label="Response">
                   <button type="button" role="tab" className="tab" aria-selected={responseTab === 'Body'} onClick={() => setResponseTab('Body')}>Body</button>
@@ -904,6 +970,7 @@ function App() {
                   {shownResponse.headers.map((header) => <div className="response-header" key={header.name}><span>{header.name}</span><code>{header.value}</code></div>)}
                 </div>
               )}
+              </>}
             </section>
           )}
         </>

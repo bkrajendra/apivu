@@ -1,3 +1,4 @@
+import type { GraphqlBody } from './graphql';
 import type { StoredResponse } from './response';
 
 export type HeaderPair = {
@@ -21,6 +22,8 @@ export type ApiRequest = {
   auth: AuthConfig;
   cookies: HeaderPair[];
   body: string;
+  bodyMode?: 'raw' | 'graphql';
+  graphql?: GraphqlBody;
   sourceCurl: string;
   updatedAt: number;
   lastResponse?: StoredResponse;

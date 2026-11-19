@@ -92,13 +92,12 @@ describe('parsePostman', () => {
     const { collection, skipped } = parsePostman(col([
       { name: 'Users', item: [
         req('Upload', { method: 'POST', url: 'https://a.com', body: { mode: 'formdata', formdata: [] } }),
-        req('Gql', { method: 'POST', url: 'https://a.com', body: { mode: 'graphql', graphql: {} } }),
         req('Oauth', { method: 'GET', url: 'https://a.com', auth: { type: 'oauth2' } }),
       ] },
     ]));
-    expect(collection.requests).toHaveLength(3);
+    expect(collection.requests).toHaveLength(2);
     expect(collection.requests.every((r) => r.body === '' && r.auth.type === 'none')).toBe(true);
-    expect(skipped).toEqual(['Users / Upload: form-data body', 'Users / Gql: GraphQL body', 'Users / Oauth: oauth2 auth']);
+    expect(skipped).toEqual(['Users / Upload: form-data body', 'Users / Oauth: oauth2 auth']);
   });
 
   it('gives each request a unique id and handles empty collections', () => {
@@ -175,5 +174,19 @@ describe('postman examples', () => {
   it('omits examples when there are none', () => {
     const { collection } = parsePostman(col([req('a', { method: 'GET', url: 'x' })]));
     expect(collection.requests[0]!.examples).toBeUndefined();
+  });
+});
+
+describe('postman graphql bodies', () => {
+  it('imports query and variables as a graphql body', () => {
+    const { collection, skipped } = parsePostman(col([
+      req('Gql', { method: 'POST', url: 'https://a.com/graphql', body: { mode: 'graphql', graphql: { query: 'query { a }', variables: '{"id":1}' } } }),
+      req('GqlObj', { method: 'POST', url: 'https://a.com/graphql', body: { mode: 'graphql', graphql: { query: '{ b }', variables: { x: 1 } } } }),
+      req('GqlEmpty', { method: 'POST', url: 'https://a.com/graphql', body: { mode: 'graphql' } }),
+    ]));
+    expect(skipped).toEqual([]);
+    expect(collection.requests[0]).toMatchObject({ bodyMode: 'graphql', graphql: { query: 'query { a }', variables: '{"id":1}' }, body: '' });
+    expect(collection.requests[1]!.graphql).toEqual({ query: '{ b }', variables: '{\n  "x": 1\n}' });
+    expect(collection.requests[2]).toMatchObject({ bodyMode: 'graphql', graphql: { query: '', variables: '' } });
   });
 });

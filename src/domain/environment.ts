@@ -56,6 +56,7 @@ export function resolveRequest(request: ApiRequest, environment: Environment | u
     url: apply(decodeEncodedPlaceholders(request.url)),
     headers: request.headers.map((header) => ({ name: apply(header.name), value: apply(header.value) })),
     body: apply(request.body),
+    ...(request.graphql ? { graphql: { query: apply(request.graphql.query), variables: apply(request.graphql.variables) } } : {}),
     auth: {
       ...request.auth,
       token: apply(request.auth.token),

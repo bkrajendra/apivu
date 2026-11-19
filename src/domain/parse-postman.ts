@@ -68,7 +68,15 @@ function convertRequest(name: string, item: Obj, inherited: Inherited, skipped: 
       .join('&');
     if (!hasHeader(request.headers, 'content-type')) request.headers.push({ name: 'Content-Type', value: 'application/x-www-form-urlencoded' });
   } else if (mode === 'formdata') skipped.push(`${name}: form-data body`);
-  else if (mode === 'graphql') skipped.push(`${name}: GraphQL body`);
+  else if (mode === 'graphql') {
+    const graphql = isObj(body?.graphql) ? body.graphql : {};
+    const variables = graphql.variables;
+    request.bodyMode = 'graphql';
+    request.graphql = {
+      query: str(graphql.query),
+      variables: typeof variables === 'string' ? variables : isObj(variables) ? JSON.stringify(variables, null, 2) : '',
+    };
+  }
   else if (mode) skipped.push(`${name}: ${mode} body`);
 
   const own = mapAuth(source.auth);
