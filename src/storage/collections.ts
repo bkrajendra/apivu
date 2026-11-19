@@ -49,3 +49,11 @@ export function exportCollections(collections: SavedCollection[], includeSecrets
 
   return JSON.stringify({ format: 'apivu-collection', version: 1, collections: exported }, null, 2);
 }
+
+export function mergeImportedCollection(existing: SavedCollection[], imported: SavedCollection): SavedCollection[] {
+  if (imported.requests.length === 0) return existing;
+  const requests = imported.requests.map((request) => ({ ...request, id: crypto.randomUUID() }));
+  const match = existing.find((collection) => collection.name.toLowerCase() === imported.name.toLowerCase());
+  if (!match) return [...existing, { id: createCollectionId(), name: imported.name, requests }];
+  return existing.map((collection) => (collection === match ? { ...collection, requests: [...collection.requests, ...requests] } : collection));
+}
