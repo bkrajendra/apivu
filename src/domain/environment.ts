@@ -53,7 +53,7 @@ export function resolveRequest(request: ApiRequest, environment: Environment | u
   };
   const resolved: ApiRequest = {
     ...request,
-    url: apply(request.url),
+    url: apply(decodeEncodedPlaceholders(request.url)),
     headers: request.headers.map((header) => ({ name: apply(header.name), value: apply(header.value) })),
     body: apply(request.body),
     auth: {
@@ -64,4 +64,34 @@ export function resolveRequest(request: ApiRequest, environment: Environment | u
     },
   };
   return { request: resolved, missing };
+}
+
+export type VariableToken = { start: number; end: number; name: string };
+
+export function findVariableTokens(text: string): VariableToken[] {
+  return Array.from(text.matchAll(PLACEHOLDER), (match) => ({ start: match.index, end: match.index + match[0].length, name: match[1]! }));
+}
+
+export type VariableLookup =
+  | { status: 'ok'; value: string; secret: boolean; environment: string }
+  | { status: 'missing'; environment: string }
+  | { status: 'noenv' }
+  | { status: 'dynamic' };
+
+export function lookupVariable(environment: Environment | undefined, name: string): VariableLookup {
+  if (name.startsWith('$')) return { status: 'dynamic' };
+  if (!environment) return { status: 'noenv' };
+  const variable = environment.variables.find((item) => item.enabled && item.key.trim() === name);
+  return variable
+    ? { status: 'ok', value: variable.value, secret: variable.secret, environment: environment.name }
+    : { status: 'missing', environment: environment.name };
+}
+
+function safeDecode(value: string): string {
+  try { return decodeURIComponent(value); } catch { return value; }
+}
+
+/** URL re-serialisation percent-encodes braces; turn `%7B%7Bname%7D%7D` back into `{{name}}`. */
+function decodeEncodedPlaceholders(url: string): string {
+  return url.replace(/%7B%7B([^{}]*?)%7D%7D/gi, (_, inner: string) => `{{${safeDecode(inner)}}}`);
 }

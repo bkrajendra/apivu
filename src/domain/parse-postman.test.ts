@@ -157,3 +157,23 @@ describe('postman environment files', () => {
     expect(parsePostmanEnvironment({ _postman_variable_scope: 'globals', values: [] }).name).toBe('Imported environment');
   });
 });
+
+describe('postman examples', () => {
+  it('imports sample responses as examples', () => {
+    const { collection } = parsePostman(col([{ name: 'Get', request: { method: 'GET', url: 'https://a.com' }, response: [
+      { name: 'Success', code: 200, status: 'OK', header: [{ key: 'Content-Type', value: 'application/json' }], body: '{"ok":true}' },
+      { code: 404, status: 'Not Found', body: '' },
+      { name: 'No code' },
+    ] }]));
+    const examples = collection.requests[0]!.examples!;
+    expect(examples).toHaveLength(3);
+    expect(examples[0]).toMatchObject({ name: 'Success', status: 200, statusText: 'OK', headers: [{ name: 'Content-Type', value: 'application/json' }], body: '{"ok":true}', elapsed: null, truncated: false });
+    expect(examples[1]).toMatchObject({ name: '404 Not Found', status: 404 });
+    expect(examples[2]).toMatchObject({ status: 0, statusText: '', body: '' });
+    expect(new Set(examples.map((example) => example.id)).size).toBe(3);
+  });
+  it('omits examples when there are none', () => {
+    const { collection } = parsePostman(col([req('a', { method: 'GET', url: 'x' })]));
+    expect(collection.requests[0]!.examples).toBeUndefined();
+  });
+});

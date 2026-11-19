@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createEnvironment, resolveRequest, resolveText, variableMap } from './environment';
+import { createEnvironment, findVariableTokens, lookupVariable, resolveRequest, resolveText, variableMap } from './environment';
 import { createRequest } from './request';
 
 const env = createEnvironment('Dev', [
@@ -42,5 +42,34 @@ describe('resolveRequest', () => {
   it('reports every placeholder as missing when there is no environment', () => {
     const request = { ...createRequest(), url: '{{baseUrl}}/x' };
     expect(resolveRequest(request, undefined)).toMatchObject({ missing: ['baseUrl'] });
+  });
+});
+
+describe('findVariableTokens', () => {
+  it('returns name and range of each placeholder', () => {
+    expect(findVariableTokens('a {{x}} b{{ y }}')).toEqual([{ start: 2, end: 7, name: 'x' }, { start: 9, end: 16, name: 'y' }]);
+    expect(findVariableTokens('none')).toEqual([]);
+  });
+});
+
+describe('lookupVariable', () => {
+  it('reports value, secret, missing, no environment and dynamic', () => {
+    expect(lookupVariable(env, 'baseUrl')).toEqual({ status: 'ok', value: 'https://dev.example.com', secret: false, environment: 'Dev' });
+    expect(lookupVariable(env, 'token')).toMatchObject({ status: 'ok', secret: true });
+    expect(lookupVariable(env, 'off')).toEqual({ status: 'missing', environment: 'Dev' });
+    expect(lookupVariable(env, 'nope')).toEqual({ status: 'missing', environment: 'Dev' });
+    expect(lookupVariable(undefined, 'x')).toEqual({ status: 'noenv' });
+    expect(lookupVariable(env, '$guid')).toEqual({ status: 'dynamic' });
+  });
+});
+
+describe('percent-encoded placeholders in urls', () => {
+  it('does not throw on malformed escapes', () => {
+    const request = { ...createRequest(), url: 'https://a.com/%7B%7Bbad%zz%7D%7D' };
+    expect(() => resolveRequest(request, env)).not.toThrow();
+  });
+  it('resolves placeholders that URL re-serialisation encoded', () => {
+    const request = { ...createRequest(), url: 'https://a.com/x?t=%7B%7Btoken%7D%7D&u=%7B%7B%20token%20%7D%7D' };
+    expect(resolveRequest(request, env).request.url).toBe('https://a.com/x?t=abc&u=abc');
   });
 });

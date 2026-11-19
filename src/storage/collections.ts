@@ -1,4 +1,5 @@
 import type { ApiRequest, SavedCollection } from '../domain/request';
+import type { StoredResponse } from '../domain/response';
 
 const STORAGE_KEY = 'collections.v1';
 const SECRET_FIELD = /auth|cookie|token|secret|password|passwd|credential|session|api[_-]?key/i;
@@ -31,6 +32,10 @@ function redactUrl(value: string): string {
   }
 }
 
+function redactResponse(response: StoredResponse): StoredResponse {
+  return { ...response, headers: response.headers.filter((header) => !SECRET_FIELD.test(header.name)) };
+}
+
 export function exportCollections(collections: SavedCollection[], includeSecrets: boolean): string {
   const exported = collections.map((collection) => ({
     ...collection,
@@ -43,6 +48,8 @@ export function exportCollections(collections: SavedCollection[], includeSecrets
         auth: { ...request.auth, token: '', password: '' },
         cookies: request.cookies.map((cookie) => ({ ...cookie, value: '' })),
         headers: request.headers.filter((header) => !SECRET_FIELD.test(header.name)),
+        ...(request.lastResponse ? { lastResponse: redactResponse(request.lastResponse) } : {}),
+        ...(request.examples ? { examples: request.examples.map(redactResponse) } : {}),
       };
     }),
   }));

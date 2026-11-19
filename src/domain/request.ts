@@ -1,3 +1,5 @@
+import type { StoredResponse } from './response';
+
 export type HeaderPair = {
   name: string;
   value: string;
@@ -21,6 +23,8 @@ export type ApiRequest = {
   body: string;
   sourceCurl: string;
   updatedAt: number;
+  lastResponse?: StoredResponse;
+  examples?: StoredResponse[];
 };
 
 export type SavedCollection = {

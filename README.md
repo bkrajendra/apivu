@@ -63,6 +63,8 @@ Load the generated `.output/chrome-mv3` directory as an unpacked extension from 
 - Save named collections locally and export them as versioned JSON.
 - Import Postman Collection v2.0/v2.1 JSON files from the Collections view. Folders are flattened into request names; form-data, GraphQL and non-bearer/basic auth are skipped and reported. Parsed locally, nothing is uploaded.
 - Environments: define variables (base URLs, tokens) and use them as `{{name}}` in URLs, headers, bodies and auth. Pick the active environment above the URL bar. Variables resolve only when sending, so saved requests and history keep the placeholders. Import Postman environment/globals files, or let a collection import bring its collection variables as an environment. Values are stored unencrypted on this device.
+- Saved responses: **Save** stores the latest response with the request (bodies capped at 200 KB) and reopening the request shows it again. Postman sample responses are imported as examples you can switch between. Responses are stored unencrypted on this device; exports without secrets drop secret-named response headers, but bodies are always included.
+- Hover a `{{variable}}` in the URL, params, headers or basic-auth username to see its resolved value (secret values stay masked unless you reveal them).
 - Exported auth credentials, cookie values, source cURL, credential-bearing URLs, and common secret headers/query parameters are redacted by default. Request bodies are included and may contain secrets.
 - Pasted cookie values are retained for reference but cannot be replayed as a manual `Cookie` header through Chrome Fetch. Browser-managed cookies are opt-in.
 - cURL is parsed as data and is never executed. Unsupported options and shell syntax are not interpreted.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createRequest, type SavedCollection } from '../domain/request';
-import { mergeImportedCollection } from './collections';
+import { exportCollections, mergeImportedCollection } from './collections';
 
 const make = (name: string, count: number): SavedCollection => ({
   id: crypto.randomUUID(),
@@ -44,5 +44,17 @@ describe('mergeImportedCollection', () => {
     const once = mergeImportedCollection([], imported);
     const twice = mergeImportedCollection(once, imported);
     expect(twice[0]!.requests).toHaveLength(4);
+  });
+});
+
+describe('exportCollections with stored responses', () => {
+  it('drops secret response headers unless secrets are included', () => {
+    const request = { ...createRequest(), name: 'r', lastResponse: { id: '1', name: 'Latest', status: 200, statusText: 'OK', elapsed: 1, truncated: false, savedAt: 1, body: '{}', headers: [{ name: 'Set-Cookie', value: 's=1' }, { name: 'Content-Type', value: 'application/json' }] } };
+    const collections = [{ id: 'c', name: 'C', requests: [request] }];
+    const redacted = JSON.parse(exportCollections(collections, false)).collections[0].requests[0].lastResponse;
+    expect(redacted.headers).toEqual([{ name: 'Content-Type', value: 'application/json' }]);
+    expect(redacted.body).toBe('{}');
+    const full = JSON.parse(exportCollections(collections, true)).collections[0].requests[0].lastResponse;
+    expect(full.headers).toHaveLength(2);
   });
 });

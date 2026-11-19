@@ -1,4 +1,5 @@
 import { createEnvironment, type EnvVariable, type Environment } from './environment';
+import { toStoredResponse, type StoredResponse } from './response';
 import { createRequest, type ApiRequest, type AuthConfig, type HeaderPair, type SavedCollection } from './request';
 
 export type PostmanImport = { collection: SavedCollection; skipped: string[]; variables: EnvVariable[] };
@@ -43,7 +44,8 @@ function hasHeader(headers: HeaderPair[], name: string): boolean {
   return headers.some((header) => header.name.toLowerCase() === name.toLowerCase());
 }
 
-function convertRequest(name: string, raw: unknown, inherited: Inherited, skipped: string[]): ApiRequest {
+function convertRequest(name: string, item: Obj, inherited: Inherited, skipped: string[]): ApiRequest {
+  const raw = item.request;
   const request = createRequest();
   request.name = name;
   const source: Obj = typeof raw === 'string' ? { url: raw } : isObj(raw) ? raw : {};
@@ -73,7 +75,23 @@ function convertRequest(name: string, raw: unknown, inherited: Inherited, skippe
   if (typeof own === 'string') skipped.push(`${name}: ${own} auth`);
   else if (own) request.auth = own;
   else if (inherited) request.auth = inherited;
+  const examples = list(item.response).map(convertExample);
+  if (examples.length) request.examples = examples;
   return request;
+}
+
+function convertExample(source: Obj): StoredResponse {
+  const code = typeof source.code === 'number' ? source.code : 0;
+  const statusText = str(source.status);
+  const stored = toStoredResponse({
+    status: code,
+    statusText,
+    elapsed: null,
+    headers: list(source.header).filter((header) => str(header.key)).map((header) => ({ name: str(header.key), value: str(header.value) })),
+    body: str(source.body),
+    truncated: false,
+  }, str(source.name) || [code || '', statusText].filter(Boolean).join(' ') || 'Example');
+  return stored;
 }
 
 function walk(items: Obj[], prefix: string, inherited: Inherited, out: ApiRequest[], skipped: string[]): void {
@@ -87,7 +105,7 @@ function walk(items: Obj[], prefix: string, inherited: Inherited, out: ApiReques
       if (typeof auth === 'string') skipped.push(`${name}: ${auth} auth`);
       walk(list(item.item), name, effective, out, skipped);
     } else if (item.request !== undefined) {
-      out.push(convertRequest(name, item.request, effective, skipped));
+      out.push(convertRequest(name, item, effective, skipped));
     }
   }
 }

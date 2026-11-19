@@ -27,7 +27,9 @@ import {
 import { JsonEditor, type ThemeConfig } from 'modern-json-react';
 import 'modern-json-react/styles.css';
 import { parseCurl } from '../../src/domain/parse-curl';
-import { createEnvironment, createVariable, resolveRequest, type Environment, type EnvVariable } from '../../src/domain/environment';
+import { createEnvironment, createVariable, lookupVariable, resolveRequest, type Environment, type EnvVariable } from '../../src/domain/environment';
+import { toResponseView, toStoredResponse, type ResponseView } from '../../src/domain/response';
+import { VarInput } from './VarInput';
 import { isPostmanEnvironment, parsePostman, parsePostmanEnvironment } from '../../src/domain/parse-postman';
 import { type ApiRequest, type HeaderPair, type SavedCollection } from '../../src/domain/request';
 import { createCollectionId, exportCollections, loadCollections, mergeImportedCollection, saveCollections } from '../../src/storage/collections';
@@ -39,7 +41,7 @@ const tabs = ['Params', 'Headers', 'Auth', 'Cookies', 'Body'] as const;
 type RequestTab = (typeof tabs)[number];
 type View = 'requests' | 'collections' | 'environments' | 'history' | 'settings';
 type ThemePreference = 'system' | 'light' | 'dark';
-type ResponseData = { status: number; statusText: string; elapsed: number; headers: HeaderPair[]; body: string; truncated: boolean };
+type ResponseData = ResponseView;
 const secretField = /auth|cookie|token|secret|password|passwd|credential|session|api[_-]?key/i;
 const methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
@@ -245,6 +247,7 @@ function App() {
   const [bodyView, setBodyView] = useState<'json' | 'raw' | null>(null);
   const [responseMode, setResponseMode] = useState<'Pretty' | 'Raw'>('Pretty');
   const [notice, setNotice] = useState('');
+  const [exampleView, setExampleView] = useState('');
   const importInput = useRef<HTMLInputElement>(null);
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [activeEnvId, setActiveEnvId] = useState<string | null>(null);
@@ -409,7 +412,8 @@ function App() {
   const recordHistory = (sent: ApiRequest, status: number | null, elapsed: number | null) => {
     if (!keepHistory) return;
     setHistory((current) => {
-      const next = addHistoryEntry(current, { request: sent, status, elapsed, sentAt: Date.now() });
+      const { lastResponse: _last, examples: _examples, ...bare } = sent;
+      const next = addHistoryEntry(current, { request: bare, status, elapsed, sentAt: Date.now() });
       void saveHistory(next).catch(() => undefined);
       return next;
     });
@@ -542,12 +546,15 @@ function App() {
       collection = { id: createCollectionId(), name: trimmedName, requests: [] };
       next.push(collection);
     }
-    const savedRequest = { ...request, name: request.name.trim() || 'Untitled request', updatedAt: Date.now() };
+    const savedRequest: ApiRequest = { ...request, name: request.name.trim() || 'Untitled request', updatedAt: Date.now() };
+    // Persist the latest response alongside the request, replacing the previous one; keep the old one if nothing was sent.
+    if (responseData) savedRequest.lastResponse = toStoredResponse(responseData, 'Latest response');
     collection.requests = [savedRequest, ...collection.requests.filter((item) => item.id !== savedRequest.id)];
     setCollections(next);
+    setRequest(savedRequest);
     try {
       await saveCollections(next);
-      setNotice('Request saved locally.');
+      setNotice(responseData ? 'Request and response saved locally.' : 'Request saved locally.');
     } catch {
       setNotice('Could not save. Local storage may be full.');
     }
@@ -662,7 +669,8 @@ function App() {
     setParseWarnings([]);
     setSendWarnings([]);
     setSendError('');
-    setResponseData(null);
+    setResponseData(savedRequest.lastResponse ? toResponseView(savedRequest.lastResponse) : null);
+    setExampleView('');
     setShowParser(false);
     setView('requests');
   };
@@ -681,19 +689,23 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [request?.id, effectiveBodyView],
   );
+  const selectedExample = request?.examples?.find((example) => example.id === exampleView);
+  const shownResponse = useMemo<ResponseView | null>(() => (selectedExample ? toResponseView(selectedExample) : responseData), [selectedExample, responseData]);
+  const lookupVar = (name: string) => lookupVariable(activeEnvironment, name);
+
   const responseIsJson = useMemo(
-    () => Boolean(responseData && !responseData.truncated && responseData.body.length <= MAX_JSON_EDITOR_BYTES && isJsonDocument(responseData.body)),
-    [responseData],
+    () => Boolean(shownResponse && !shownResponse.truncated && shownResponse.body.length <= MAX_JSON_EDITOR_BYTES && isJsonDocument(shownResponse.body)),
+    [shownResponse],
   );
 
   const prettyBody = useMemo(() => {
-    if (!responseData?.body) return '';
+    if (!shownResponse?.body) return '';
     try {
-      return JSON.stringify(JSON.parse(responseData.body), null, 2);
+      return JSON.stringify(JSON.parse(shownResponse.body), null, 2);
     } catch {
-      return responseData.body;
+      return shownResponse.body;
     }
-  }, [responseData?.body]);
+  }, [shownResponse?.body]);
 
   const savedCount = collections.reduce((total, collection) => total + collection.requests.length, 0);
   const revealButton = (label: string) => (
@@ -751,7 +763,7 @@ function App() {
               <select className={`method-select ${methodClass(request.method)}`} value={request.method} onChange={(event) => updateRequest({ method: event.target.value })} aria-label="HTTP method">
                 {methods.map((method) => <option key={method}>{method}</option>)}
               </select>
-              <input className="url-input" value={visibleUrl} onFocus={() => setUrlFocused(true)} onBlur={() => setUrlFocused(false)} onChange={(event) => updateRequest({ url: event.target.value })} aria-label="Request URL" placeholder="https://api.example.com/path" spellCheck={false} />
+              <VarInput lookup={lookupVar} reveal={showSecrets} className="url-input" value={visibleUrl} onFocus={() => setUrlFocused(true)} onBlur={() => setUrlFocused(false)} onChange={(event) => updateRequest({ url: event.target.value })} aria-label="Request URL" placeholder="https://api.example.com/path" spellCheck={false} />
               <WarningsBadge warnings={[...parseWarnings, ...sendWarnings]} />
             </div>
             <button className="button button-primary button-lg send-button" type="button" onClick={() => void handleSend()} disabled={sending}>
@@ -778,8 +790,8 @@ function App() {
                 {queryPairs.length > 0 && <div className="pair-heading"><span>Key</span><span>Value</span><span /></div>}
                 {queryPairs.map(([key, value], index) => (
                   <div className="pair-row" key={`${index}-${key}`}>
-                    <input className="input" value={key} aria-label={`Parameter ${index + 1} key`} placeholder="key" onChange={(event) => updateQueryPair(index, event.target.value, value)} />
-                    <input className="input" type={showSecrets || !secretField.test(key) ? 'text' : 'password'} value={value} aria-label={`Parameter ${index + 1} value`} placeholder="value" onChange={(event) => updateQueryPair(index, key, event.target.value)} />
+                    <VarInput lookup={lookupVar} reveal={showSecrets} className="input" value={key} aria-label={`Parameter ${index + 1} key`} placeholder="key" onChange={(event) => updateQueryPair(index, event.target.value, value)} />
+                    <VarInput lookup={lookupVar} reveal={showSecrets} className="input" type={showSecrets || !secretField.test(key) ? 'text' : 'password'} value={value} aria-label={`Parameter ${index + 1} value`} placeholder="value" onChange={(event) => updateQueryPair(index, key, event.target.value)} />
                     <button className="icon-button" type="button" title="Remove parameter" aria-label={`Remove parameter ${index + 1}`} onClick={() => removeQueryPair(index)}><X size={15} /></button>
                   </div>
                 ))}
@@ -795,8 +807,8 @@ function App() {
                 {request.headers.length > 0 && <div className="pair-heading"><span>Header</span><span>Value</span><span /></div>}
                 {request.headers.map((header, index) => (
                   <div className="pair-row" key={index}>
-                    <input className="input" value={header.name} aria-label={`Header ${index + 1} name`} placeholder="Header name" onChange={(event) => updatePair('headers', index, 'name', event.target.value)} />
-                    <input className="input" value={header.value} aria-label={`Header ${index + 1} value`} placeholder="Value" onChange={(event) => updatePair('headers', index, 'value', event.target.value)} />
+                    <VarInput lookup={lookupVar} reveal={showSecrets} className="input" value={header.name} aria-label={`Header ${index + 1} name`} placeholder="Header name" onChange={(event) => updatePair('headers', index, 'name', event.target.value)} />
+                    <VarInput lookup={lookupVar} reveal={showSecrets} className="input" value={header.value} aria-label={`Header ${index + 1} value`} placeholder="Value" onChange={(event) => updatePair('headers', index, 'value', event.target.value)} />
                     <button className="icon-button" type="button" title="Remove header" aria-label={`Remove header ${index + 1}`} onClick={() => removePair('headers', index)}><X size={15} /></button>
                   </div>
                 ))}
@@ -810,10 +822,10 @@ function App() {
                 <select id="auth-type" className="input select" value={request.auth.type} onChange={(event) => updateRequest({ auth: { ...request.auth, type: event.target.value as ApiRequest['auth']['type'] } })}>
                   <option value="none">No auth</option><option value="bearer">Bearer token</option><option value="basic">Basic auth</option>
                 </select>
-                {request.auth.type === 'bearer' && <label className="field-label" htmlFor="bearer-token">Token<input id="bearer-token" className="input" type={showSecrets ? 'text' : 'password'} autoComplete="off" value={request.auth.token} onChange={(event) => updateRequest({ auth: { ...request.auth, token: event.target.value } })} placeholder="Paste token" /></label>}
+                {request.auth.type === 'bearer' && <label className="field-label" htmlFor="bearer-token">Token<VarInput lookup={lookupVar} reveal={showSecrets} id="bearer-token" className="input" type={showSecrets ? 'text' : 'password'} autoComplete="off" value={request.auth.token} onChange={(event) => updateRequest({ auth: { ...request.auth, token: event.target.value } })} placeholder="Paste token" /></label>}
                 {request.auth.type === 'basic' && <>
-                  <label className="field-label" htmlFor="basic-user">Username<input id="basic-user" className="input" autoComplete="off" value={request.auth.username} onChange={(event) => updateRequest({ auth: { ...request.auth, username: event.target.value } })} placeholder="Username" /></label>
-                  <label className="field-label" htmlFor="basic-password">Password<input id="basic-password" className="input" type={showSecrets ? 'text' : 'password'} autoComplete="new-password" value={request.auth.password} onChange={(event) => updateRequest({ auth: { ...request.auth, password: event.target.value } })} placeholder="Password" /></label>
+                  <label className="field-label" htmlFor="basic-user">Username<VarInput lookup={lookupVar} reveal={showSecrets} id="basic-user" className="input" autoComplete="off" value={request.auth.username} onChange={(event) => updateRequest({ auth: { ...request.auth, username: event.target.value } })} placeholder="Username" /></label>
+                  <label className="field-label" htmlFor="basic-password">Password<VarInput lookup={lookupVar} reveal={showSecrets} id="basic-password" className="input" type={showSecrets ? 'text' : 'password'} autoComplete="new-password" value={request.auth.password} onChange={(event) => updateRequest({ auth: { ...request.auth, password: event.target.value } })} placeholder="Password" /></label>
                 </>}
                 {request.auth.type !== 'none' && <div>{revealButton('secrets')}</div>}
               </div>
@@ -857,30 +869,39 @@ function App() {
             <button className="button button-secondary save-button" type="button" onClick={() => void handleSave()} title="Save request locally"><Save size={15} /> Save</button>
           </div>
 
-          {responseData && (
+          {(request.lastResponse || (request.examples?.length ?? 0) > 0) && (
+            <label className="response-picker"><span>Saved response</span>
+              <select className="input select" value={selectedExample ? selectedExample.id : ''} onChange={(event) => setExampleView(event.target.value)} aria-label="Saved response to view">
+                <option value="">{responseData ? 'Latest response' : 'No response shown'}</option>
+                {(request.examples ?? []).map((example) => <option key={example.id} value={example.id}>Example: {example.name}</option>)}
+              </select>
+            </label>
+          )}
+
+          {shownResponse && (
             <section className="card response-card" aria-label="Response">
               <div className="response-meta">
                 <span className="section-title">Response</span>
-                <span className={`status-pill ${responseData.status < 300 ? 'is-success' : responseData.status < 400 ? 'is-info' : 'is-error'}`}>
-                  {responseData.status < 400 ? <Check size={13} /> : <AlertTriangle size={13} />}{responseData.status} {responseData.statusText}
+                <span className={`status-pill ${shownResponse.status < 300 ? 'is-success' : shownResponse.status < 400 ? 'is-info' : 'is-error'}`}>
+                  {shownResponse.status < 400 ? <Check size={13} /> : <AlertTriangle size={13} />}{shownResponse.status} {shownResponse.statusText}
                 </span>
-                <span className="caption">{responseData.elapsed} ms</span>
-                <span className="caption">{formatBytes(responseData.body)}{responseData.truncated ? ' (truncated)' : ''}</span>
+                {shownResponse.elapsed !== null && <span className="caption">{shownResponse.elapsed} ms</span>}
+                <span className="caption">{formatBytes(shownResponse.body)}{shownResponse.truncated ? ' (truncated)' : ''}</span>
               </div>
               <div className="response-toolbar">
                 <nav className="tab-list tab-list-compact" role="tablist" aria-label="Response">
                   <button type="button" role="tab" className="tab" aria-selected={responseTab === 'Body'} onClick={() => setResponseTab('Body')}>Body</button>
-                  <button type="button" role="tab" className="tab" aria-selected={responseTab === 'Headers'} onClick={() => setResponseTab('Headers')}>Headers<span className="count-badge">{responseData.headers.length}</span></button>
+                  <button type="button" role="tab" className="tab" aria-selected={responseTab === 'Headers'} onClick={() => setResponseTab('Headers')}>Headers<span className="count-badge">{shownResponse.headers.length}</span></button>
                 </nav>
                 {responseTab === 'Body' && <SegmentedControl label="Response format" value={responseMode} options={[{ value: 'Pretty', label: 'Pretty' }, { value: 'Raw', label: 'Raw' }]} onChange={setResponseMode} />}
               </div>
               {responseTab === 'Body' && (responseMode === 'Pretty' && responseIsJson
                 ? <JsonEditor className="json-field" value={prettyBody} theme={editorThemes[theme]} height={isTabView ? 460 : 340} mode={responseEditorMode} onModeChange={setResponseEditorMode} indentation={2} readOnly />
-                : <pre className="response-body code-text">{responseData.truncated ? `${responseMode === 'Pretty' ? prettyBody : responseData.body}\n\n[Response truncated at 1 MB]` : (responseMode === 'Pretty' ? prettyBody : responseData.body) || 'Empty response body'}</pre>)}
+                : <pre className="response-body code-text">{shownResponse.truncated ? `${responseMode === 'Pretty' ? prettyBody : shownResponse.body}\n\n[Response truncated at 1 MB]` : (responseMode === 'Pretty' ? prettyBody : shownResponse.body) || 'Empty response body'}</pre>)}
               {responseTab === 'Headers' && (
                 <div className="response-headers">
-                  {responseData.headers.length === 0 && <p className="empty-note">No response headers.</p>}
-                  {responseData.headers.map((header) => <div className="response-header" key={header.name}><span>{header.name}</span><code>{header.value}</code></div>)}
+                  {shownResponse.headers.length === 0 && <p className="empty-note">No response headers.</p>}
+                  {shownResponse.headers.map((header) => <div className="response-header" key={header.name}><span>{header.name}</span><code>{header.value}</code></div>)}
                 </div>
               )}
             </section>
