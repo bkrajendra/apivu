@@ -27,9 +27,11 @@ import {
 import { JsonEditor, type ThemeConfig } from 'modern-json-react';
 import 'modern-json-react/styles.css';
 import { parseCurl } from '../../src/domain/parse-curl';
-import { parsePostman } from '../../src/domain/parse-postman';
+import { createEnvironment, createVariable, resolveRequest, type Environment, type EnvVariable } from '../../src/domain/environment';
+import { isPostmanEnvironment, parsePostman, parsePostmanEnvironment } from '../../src/domain/parse-postman';
 import { type ApiRequest, type HeaderPair, type SavedCollection } from '../../src/domain/request';
 import { createCollectionId, exportCollections, loadCollections, mergeImportedCollection, saveCollections } from '../../src/storage/collections';
+import { loadEnvironments, mergeImportedEnvironment, saveEnvironments } from '../../src/storage/environments';
 import { addHistoryEntry, loadHistory, saveHistory, type HistoryEntry } from '../../src/storage/history';
 import './App.css';
 
@@ -244,11 +246,18 @@ function App() {
   const [responseMode, setResponseMode] = useState<'Pretty' | 'Raw'>('Pretty');
   const [notice, setNotice] = useState('');
   const importInput = useRef<HTMLInputElement>(null);
+  const [environments, setEnvironments] = useState<Environment[]>([]);
+  const [activeEnvId, setActiveEnvId] = useState<string | null>(null);
+  const [editingEnvId, setEditingEnvId] = useState<string | null>(null);
   const version = useMemo(() => browser.runtime.getManifest().version, []);
 
   useEffect(() => {
     void loadCollections().then(setCollections).catch(() => setNotice('Local storage is unavailable.'));
     void loadHistory().then(setHistory).catch(() => undefined);
+    void loadEnvironments().then((state) => {
+      setEnvironments(state.environments);
+      setActiveEnvId(state.activeId);
+    }).catch(() => undefined);
     void browser.storage.local.get(['uiTheme', 'keepHistory']).then(({ uiTheme, keepHistory: storedKeepHistory }) => {
       if (uiTheme === 'light' || uiTheme === 'dark' || uiTheme === 'system') setThemePreference(uiTheme);
       if (typeof storedKeepHistory === 'boolean') setKeepHistory(storedKeepHistory);
@@ -291,6 +300,37 @@ function App() {
     () => displayUrl(request?.url ?? '', showSecrets || urlFocused),
     [request?.url, showSecrets, urlFocused],
   );
+
+  const persistEnvironments = (nextEnvironments: Environment[], nextActiveId: string | null) => {
+    const activeId = nextEnvironments.some((environment) => environment.id === nextActiveId) ? nextActiveId : null;
+    setEnvironments(nextEnvironments);
+    setActiveEnvId(activeId);
+    void saveEnvironments({ environments: nextEnvironments, activeId }).catch(() => setNotice('Could not update local storage.'));
+  };
+
+  const activeEnvironment = environments.find((environment) => environment.id === activeEnvId);
+  const editingEnvironment = environments.find((environment) => environment.id === editingEnvId) ?? activeEnvironment ?? environments[0];
+
+  const updateEnvironment = (id: string, changes: Partial<Environment>) => {
+    persistEnvironments(environments.map((environment) => (environment.id === id ? { ...environment, ...changes } : environment)), activeEnvId);
+  };
+
+  const updateVariable = (index: number, changes: Partial<EnvVariable>) => {
+    if (!editingEnvironment) return;
+    updateEnvironment(editingEnvironment.id, { variables: editingEnvironment.variables.map((variable, position) => (position === index ? { ...variable, ...changes } : variable)) });
+  };
+
+  const addEnvironment = () => {
+    const environment = createEnvironment(`Environment ${environments.length + 1}`, [createVariable()]);
+    persistEnvironments([...environments, environment], activeEnvId ?? environment.id);
+    setEditingEnvId(environment.id);
+  };
+
+  const deleteEnvironment = (id: string) => {
+    if (!window.confirm('Delete this environment?')) return;
+    persistEnvironments(environments.filter((environment) => environment.id !== id), activeEnvId);
+    setEditingEnvId(null);
+  };
 
   const updateRequest = (changes: Partial<ApiRequest>) => {
     setRequest((current) => current ? { ...current, ...changes, updatedAt: Date.now() } : current);
@@ -381,23 +421,29 @@ function App() {
     setSendWarnings([]);
     setResponseData(null);
 
+    const { request: resolvedRequest, missing } = resolveRequest(request, activeEnvironment);
+    const usesVariables = JSON.stringify(resolvedRequest) !== JSON.stringify(request);
+
     let target: URL;
     try {
-      target = new URL(request.url);
+      target = new URL(resolvedRequest.url);
       if (!['http:', 'https:'].includes(target.protocol)) throw new Error();
     } catch {
-      setSendError('Enter a valid HTTP or HTTPS URL.');
+      setSendError(missing.length
+        ? `Undefined variable${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}. Choose or create an environment that defines ${missing.length === 1 ? 'it' : 'them'}.`
+        : 'Enter a valid HTTP or HTTPS URL.');
       return;
     }
 
-    let requestToSend = request;
+    let requestToSend = resolvedRequest;
     const preliminaryWarnings: string[] = [];
+    if (missing.length) preliminaryWarnings.push(`Undefined variable${missing.length === 1 ? '' : 's'} left as-is: ${missing.join(', ')}.`);
     if (target.username || target.password) {
       const decode = (value: string) => {
         try { return decodeURIComponent(value); } catch { return value; }
       };
-      const hasExplicitAuth = request.auth.type !== 'none';
-      const auth = hasExplicitAuth ? request.auth : {
+      const hasExplicitAuth = resolvedRequest.auth.type !== 'none';
+      const auth = hasExplicitAuth ? resolvedRequest.auth : {
         type: 'basic' as const,
         token: '',
         username: decode(target.username),
@@ -406,8 +452,9 @@ function App() {
       if (hasExplicitAuth) preliminaryWarnings.push('Credentials embedded in the URL were removed; the configured auth was used.');
       target.username = '';
       target.password = '';
-      requestToSend = { ...request, url: target.toString(), auth };
-      updateRequest({ url: requestToSend.url, auth });
+      requestToSend = { ...resolvedRequest, url: target.toString(), auth };
+      // Never write resolved variable values (possibly secrets) back into the saved request.
+      if (!usesVariables) updateRequest({ url: requestToSend.url, auth });
     }
 
     setSending(true);
@@ -473,13 +520,13 @@ function App() {
       });
       setResponseTab('Body');
       setSendWarnings(warnings);
-      recordHistory(requestToSend, response.status, elapsed);
+      recordHistory(usesVariables ? request : requestToSend, response.status, elapsed);
     } catch (error) {
       setSendError(error instanceof DOMException && error.name === 'AbortError'
         ? 'Request timed out after 30 seconds.'
         : 'Request failed. Check the URL, host permission, network, or browser policy.');
       setSendWarnings(warnings);
-      recordHistory(requestToSend, null, null);
+      recordHistory(usesVariables ? request : requestToSend, null, null);
     } finally {
       window.clearTimeout(timeout);
       setSending(false);
@@ -543,20 +590,38 @@ function App() {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    let parsed: ReturnType<typeof parsePostman>;
+    let json: unknown;
     try {
-      let json: unknown;
-      try {
-        json = JSON.parse(await file.text());
-      } catch {
-        throw new Error('Could not read this file as JSON.');
-      }
-      parsed = parsePostman(json);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Could not import this file.');
+      json = JSON.parse(await file.text());
+    } catch {
+      setNotice('Could not read this file as JSON.');
       return;
     }
-    const { collection, skipped } = parsed;
+
+    if (isPostmanEnvironment(json)) {
+      const environment = parsePostmanEnvironment(json);
+      if (environment.variables.length === 0) {
+        setNotice('No variables found in this environment.');
+        return;
+      }
+      const next = mergeImportedEnvironment(environments, environment);
+      const target = next.find((item) => item.name.toLowerCase() === environment.name.toLowerCase());
+      persistEnvironments(next, activeEnvId ?? target?.id ?? null);
+      setEditingEnvId(target?.id ?? null);
+      setView('environments');
+      const count = environment.variables.length;
+      setNotice(`Imported ${count} variable${count === 1 ? '' : 's'} into environment "${environment.name}".`);
+      return;
+    }
+
+    let parsed: ReturnType<typeof parsePostman>;
+    try {
+      parsed = parsePostman(json);
+    } catch (error) {
+      setNotice(error instanceof Error ? `${error.message} Environment files are also supported.` : 'Could not import this file.');
+      return;
+    }
+    const { collection, skipped, variables } = parsed;
     if (collection.requests.length === 0) {
       setNotice('No requests found in this collection.');
       return;
@@ -569,8 +634,16 @@ function App() {
       return;
     }
     setCollections(next);
+    let envNote = '';
+    if (variables.length > 0) {
+      const environment = createEnvironment(`${collection.name} variables`, variables);
+      const merged = mergeImportedEnvironment(environments, environment);
+      const target = merged.find((item) => item.name.toLowerCase() === environment.name.toLowerCase());
+      persistEnvironments(merged, activeEnvId ?? target?.id ?? null);
+      envNote = ` ${variables.length} collection variable${variables.length === 1 ? '' : 's'} saved as environment "${environment.name}".`;
+    }
     const count = collection.requests.length;
-    setNotice(`Imported ${count} request${count === 1 ? '' : 's'} into "${collection.name}"${skipped.length ? ` (${skipped.length} skipped: ${skipped.slice(0, 3).join('; ')}${skipped.length > 3 ? '; …' : ''})` : ''}.`);
+    setNotice(`Imported ${count} request${count === 1 ? '' : 's'} into "${collection.name}"${skipped.length ? ` (${skipped.length} skipped: ${skipped.slice(0, 3).join('; ')}${skipped.length > 3 ? '; …' : ''})` : ''}.${envNote}`);
   };
 
   const importControls = (
@@ -667,6 +740,12 @@ function App() {
 
       {request && !showParser && (
         <>
+          <label className="env-bar"><Layers size={14} aria-hidden="true" /><span>Environment</span>
+            <select className="input select env-select" value={activeEnvId ?? ''} onChange={(event) => persistEnvironments(environments, event.target.value || null)} aria-label="Active environment">
+              <option value="">No environment</option>
+              {environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}
+            </select>
+          </label>
           <div className="url-row">
             <div className="url-field">
               <select className={`method-select ${methodClass(request.method)}`} value={request.method} onChange={(event) => updateRequest({ method: event.target.value })} aria-label="HTTP method">
@@ -886,8 +965,41 @@ function App() {
           <p className="eyebrow">Workspace</p>
           <h1>Environments</h1>
         </div>
+        <div className="heading-actions">
+          {importControls}
+          <button className="button button-primary" type="button" onClick={addEnvironment}><Plus size={15} /> New environment</button>
+        </div>
       </div>
-      <EmptyState icon={<Layers size={20} />} title="Environments are coming soon">Environment variables such as base URLs and tokens, swapped per environment, are planned for a future version.</EmptyState>
+      {!editingEnvironment ? (
+        <EmptyState icon={<Layers size={20} />} title="No environments yet">Define variables like <code>baseUrl</code> or <code>token</code>, then use them as <code>{'{{baseUrl}}'}</code> in URLs, headers, bodies and auth. Import a Postman environment file or collection to start with your existing ones.</EmptyState>
+      ) : (
+        <section className="card env-card">
+          <div className="env-toolbar">
+            <select className="input select" value={editingEnvironment.id} onChange={(event) => setEditingEnvId(event.target.value)} aria-label="Environment to edit">
+              {environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}{environment.id === activeEnvId ? ' (active)' : ''}</option>)}
+            </select>
+            <button className="button button-secondary" type="button" onClick={() => persistEnvironments(environments, editingEnvironment.id)} disabled={editingEnvironment.id === activeEnvId}>{editingEnvironment.id === activeEnvId ? 'Active' : 'Set active'}</button>
+            <button className="icon-button icon-danger" type="button" title="Delete environment" aria-label="Delete environment" onClick={() => deleteEnvironment(editingEnvironment.id)}><Trash2 size={15} /></button>
+          </div>
+          <label className="field-label" htmlFor="env-name">Name<input id="env-name" className="input" value={editingEnvironment.name} onChange={(event) => updateEnvironment(editingEnvironment.id, { name: event.target.value })} /></label>
+          <div className="env-rows">
+            {editingEnvironment.variables.map((variable, index) => (
+              <div className="env-row" key={index}>
+                <input type="checkbox" checked={variable.enabled} aria-label={`Variable ${index + 1} enabled`} onChange={(event) => updateVariable(index, { enabled: event.target.checked })} />
+                <input className="input" value={variable.key} aria-label={`Variable ${index + 1} name`} placeholder="name" spellCheck={false} onChange={(event) => updateVariable(index, { key: event.target.value })} />
+                <input className="input" type={variable.secret && !showSecrets ? 'password' : 'text'} autoComplete="off" value={variable.value} aria-label={`Variable ${index + 1} value`} placeholder="value" spellCheck={false} onChange={(event) => updateVariable(index, { value: event.target.value })} />
+                <label className="check-row env-secret" title="Mask this value"><input type="checkbox" checked={variable.secret} onChange={(event) => updateVariable(index, { secret: event.target.checked })} /><span>Secret</span></label>
+                <button className="icon-button icon-danger" type="button" title="Remove variable" aria-label={`Remove variable ${index + 1}`} onClick={() => updateEnvironment(editingEnvironment.id, { variables: editingEnvironment.variables.filter((_, position) => position !== index) })}><X size={14} /></button>
+              </div>
+            ))}
+          </div>
+          <div className="inline-actions">
+            <button className="button button-secondary" type="button" onClick={() => updateEnvironment(editingEnvironment.id, { variables: [...editingEnvironment.variables, createVariable()] })}><Plus size={15} /> Add variable</button>
+            <label className="check-row"><input type="checkbox" checked={showSecrets} onChange={(event) => setShowSecrets(event.target.checked)} /><span>Reveal secrets</span></label>
+          </div>
+          <p className="caption">Variables resolve when you send, in the URL, headers, body and auth. Saved requests and history keep the <code>{'{{placeholders}}'}</code>. Values are stored unencrypted on this device.</p>
+        </section>
+      )}
     </>
   );
 
@@ -917,6 +1029,7 @@ function App() {
           <div className="inline-actions">
             <button className="button button-secondary" type="button" onClick={() => void handleClearHistory()} disabled={history.length === 0}>Clear history</button>
             <button className="button button-danger" type="button" onClick={() => void handleClear()} disabled={collections.length === 0}><Trash2 size={15} /> Clear collections</button>
+            <button className="button button-danger" type="button" onClick={() => { if (window.confirm('Delete every environment from this device?')) { persistEnvironments([], null); setEditingEnvId(null); setNotice('All environments were deleted.'); } }} disabled={environments.length === 0}><Trash2 size={15} /> Clear environments</button>
           </div>
         </div>
       </section>
