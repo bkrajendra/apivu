@@ -39,6 +39,7 @@ a { color: var(--apivu-blue); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--apivu-space-3); margin-bottom: var(--apivu-space-5); }
+.heading-actions { display: flex; flex-wrap: wrap; gap: var(--apivu-space-2); }
 
 /* ---------- Controls ---------- */
 .button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex: 0 0 auto; min-height: var(--apivu-control-height-md); padding: 0 14px; border: 1px solid transparent; border-radius: var(--apivu-radius-md); font-size: 13px; font-weight: 600; line-height: 1; white-space: nowrap; cursor: pointer; transition: background-color var(--apivu-transition-fast), border-color var(--apivu-transition-fast), color var(--apivu-transition-fast), transform var(--apivu-transition-fast); }

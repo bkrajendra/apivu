@@ -61,6 +61,7 @@ Load the generated `.output/chrome-mv3` directory as an unpacked extension from 
 - Paste and parse common cURL commands, then review and edit method, URL, query parameters, headers, auth, cookies, and body.
 - Send HTTP and HTTPS requests after granting access to that target host.
 - Save named collections locally and export them as versioned JSON.
+- Import Postman Collection v2.0/v2.1 JSON files from the Collections view. Folders are flattened into request names; form-data, GraphQL and non-bearer/basic auth are skipped and reported. Parsed locally, nothing is uploaded.
 - Exported auth credentials, cookie values, source cURL, credential-bearing URLs, and common secret headers/query parameters are redacted by default. Request bodies are included and may contain secrets.
 - Pasted cookie values are retained for reference but cannot be replayed as a manual `Cookie` header through Chrome Fetch. Browser-managed cookies are opt-in.
 - cURL is parsed as data and is never executed. Unsupported options and shell syntax are not interpreted.

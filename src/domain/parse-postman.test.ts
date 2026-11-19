@@ -46,14 +46,14 @@ describe('parsePostman', () => {
     const { collection } = parsePostman(col([
       { name: 'Users', item: [{ name: 'Admin', item: [req('Create', { method: 'POST', url: 'https://a.com' })] }] },
     ]));
-    expect(collection.requests[0].name).toBe('Users / Admin / Create');
+    expect(collection!.requests[0]!.name).toBe('Users / Admin / Create');
   });
 
   it('skips disabled headers', () => {
     const { collection } = parsePostman(col([
       req('h', { method: 'GET', url: 'https://a.com', header: [{ key: 'A', value: '1', disabled: true }, { key: 'B', value: '2' }] }),
     ]));
-    expect(collection.requests[0].headers).toEqual([{ name: 'B', value: '2' }]);
+    expect(collection!.requests[0]!.headers).toEqual([{ name: 'B', value: '2' }]);
   });
 
   it('maps raw, json and urlencoded bodies', () => {
@@ -64,12 +64,12 @@ describe('parsePostman', () => {
       req('form', { method: 'POST', url: 'https://a.com', body: { mode: 'urlencoded', urlencoded: [{ key: 'a', value: '1 2' }, { key: 'b', value: '&', disabled: true }, { key: 'c', value: '3' }] } }),
     ]));
     const [raw, json, keep, form] = collection.requests;
-    expect(raw.body).toBe('hello');
-    expect(raw.headers).toEqual([]);
-    expect(json.headers).toEqual([{ name: 'Content-Type', value: 'application/json' }]);
-    expect(keep.headers).toEqual([{ name: 'content-type', value: 'text/x' }]);
-    expect(form.body).toBe('a=1%202&c=3');
-    expect(form.headers).toEqual([{ name: 'Content-Type', value: 'application/x-www-form-urlencoded' }]);
+    expect(raw!.body).toBe('hello');
+    expect(raw!.headers).toEqual([]);
+    expect(json!.headers).toEqual([{ name: 'Content-Type', value: 'application/json' }]);
+    expect(keep!.headers).toEqual([{ name: 'content-type', value: 'text/x' }]);
+    expect(form!.body).toBe('a=1%202&c=3');
+    expect(form!.headers).toEqual([{ name: 'Content-Type', value: 'application/x-www-form-urlencoded' }]);
   });
 
   it('maps bearer and basic auth, with inheritance and noauth override', () => {
@@ -81,10 +81,10 @@ describe('parsePostman', () => {
       { name: 'F', auth: { type: 'basic', basic: [{ key: 'username', value: 'fu' }, { key: 'password', value: 'fp' }] }, item: [req('in-folder', { method: 'GET', url: 'https://a.com' })] },
     ], { auth: bearer }));
     const [inherits, basic, off, inFolder] = collection.requests;
-    expect(inherits.auth).toMatchObject({ type: 'bearer', token: 'tok' });
-    expect(basic.auth).toMatchObject({ type: 'basic', username: 'u', password: 'p' });
-    expect(off.auth.type).toBe('none');
-    expect(inFolder.auth).toMatchObject({ type: 'basic', username: 'fu', password: 'fp' });
+    expect(inherits!.auth).toMatchObject({ type: 'bearer', token: 'tok' });
+    expect(basic!.auth).toMatchObject({ type: 'basic', username: 'u', password: 'p' });
+    expect(off!.auth.type).toBe('none');
+    expect(inFolder!.auth).toMatchObject({ type: 'basic', username: 'fu', password: 'fp' });
     expect(skipped).toEqual([]);
   });
 

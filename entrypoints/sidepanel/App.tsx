@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -21,13 +21,15 @@ import {
   Settings,
   Sun,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import { JsonEditor, type ThemeConfig } from 'modern-json-react';
 import 'modern-json-react/styles.css';
 import { parseCurl } from '../../src/domain/parse-curl';
+import { parsePostman } from '../../src/domain/parse-postman';
 import { type ApiRequest, type HeaderPair, type SavedCollection } from '../../src/domain/request';
-import { createCollectionId, exportCollections, loadCollections, saveCollections } from '../../src/storage/collections';
+import { createCollectionId, exportCollections, loadCollections, mergeImportedCollection, saveCollections } from '../../src/storage/collections';
 import { addHistoryEntry, loadHistory, saveHistory, type HistoryEntry } from '../../src/storage/history';
 import './App.css';
 
@@ -241,6 +243,7 @@ function App() {
   const [bodyView, setBodyView] = useState<'json' | 'raw' | null>(null);
   const [responseMode, setResponseMode] = useState<'Pretty' | 'Raw'>('Pretty');
   const [notice, setNotice] = useState('');
+  const importInput = useRef<HTMLInputElement>(null);
   const version = useMemo(() => browser.runtime.getManifest().version, []);
 
   useEffect(() => {
@@ -536,6 +539,47 @@ function App() {
     setNotice(includeSecrets ? 'Exported with secrets.' : 'Exported with secrets redacted.');
   };
 
+  const handleImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    let parsed: ReturnType<typeof parsePostman>;
+    try {
+      let json: unknown;
+      try {
+        json = JSON.parse(await file.text());
+      } catch {
+        throw new Error('Could not read this file as JSON.');
+      }
+      parsed = parsePostman(json);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not import this file.');
+      return;
+    }
+    const { collection, skipped } = parsed;
+    if (collection.requests.length === 0) {
+      setNotice('No requests found in this collection.');
+      return;
+    }
+    const next = mergeImportedCollection(collections, collection);
+    try {
+      await saveCollections(next);
+    } catch {
+      setNotice('Could not update local storage.');
+      return;
+    }
+    setCollections(next);
+    const count = collection.requests.length;
+    setNotice(`Imported ${count} request${count === 1 ? '' : 's'} into "${collection.name}"${skipped.length ? ` (${skipped.length} skipped: ${skipped.slice(0, 3).join('; ')}${skipped.length > 3 ? '; …' : ''})` : ''}.`);
+  };
+
+  const importControls = (
+    <>
+      <input ref={importInput} type="file" accept=".json,application/json" hidden onChange={(event) => void handleImportFile(event)} />
+      <button className="button button-secondary" type="button" onClick={() => importInput.current?.click()}><Upload size={15} /> Import Postman</button>
+    </>
+  );
+
   const openRequest = (savedRequest: ApiRequest, parentName?: string) => {
     setRequest(savedRequest);
     setBodyView(null);
@@ -774,10 +818,13 @@ function App() {
           <p className="eyebrow">Workspace</p>
           <h1>Collections</h1>
         </div>
-        <button className="button button-secondary" type="button" onClick={handleExport} disabled={collections.length === 0}><Download size={15} /> Export JSON</button>
+        <div className="heading-actions">
+          {importControls}
+          <button className="button button-secondary" type="button" onClick={handleExport} disabled={collections.length === 0}><Download size={15} /> Export JSON</button>
+        </div>
       </div>
       {collections.length === 0 ? (
-        <EmptyState icon={<Folder size={20} />} title="No saved requests yet">Build a request, give it a name and collection, then press Save. It stays on this device.</EmptyState>
+        <EmptyState icon={<Folder size={20} />} title="No saved requests yet">Build a request, give it a name and collection, then press Save, or import a Postman collection. It stays on this device.</EmptyState>
       ) : (
         <>
           {collections.map((collection) => (
