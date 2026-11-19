@@ -1,6 +1,7 @@
+import { createEnvironment, type EnvVariable, type Environment } from './environment';
 import { createRequest, type ApiRequest, type AuthConfig, type HeaderPair, type SavedCollection } from './request';
 
-export type PostmanImport = { collection: SavedCollection; skipped: string[] };
+export type PostmanImport = { collection: SavedCollection; skipped: string[]; variables: EnvVariable[] };
 
 type Obj = Record<string, unknown>;
 type Inherited = AuthConfig | undefined;
@@ -103,5 +104,25 @@ export function parsePostman(input: unknown): PostmanImport {
   return {
     collection: { id: crypto.randomUUID(), name: str(input.info.name) || 'Imported collection', requests },
     skipped,
+    variables: mapVariables(input.variable, (item) => item.disabled !== true),
   };
+}
+
+function mapVariables(entries: unknown, isEnabled: (item: Obj) => boolean, isSecret: (item: Obj) => boolean = () => false): EnvVariable[] {
+  return list(entries)
+    .filter((item) => str(item.key).trim())
+    .map((item) => ({ key: str(item.key).trim(), value: typeof item.value === 'string' ? item.value : item.value == null ? '' : String(item.value), secret: isSecret(item), enabled: isEnabled(item) }));
+}
+
+export function isPostmanEnvironment(input: unknown): boolean {
+  return isObj(input) && ['environment', 'globals'].includes(str(input._postman_variable_scope)) && Array.isArray(input.values);
+}
+
+export function parsePostmanEnvironment(input: unknown): Environment {
+  if (!isPostmanEnvironment(input)) throw new Error('Not a Postman environment file.');
+  const source = input as Obj;
+  return createEnvironment(
+    str(source.name).trim() || 'Imported environment',
+    mapVariables(source.values, (item) => item.enabled !== false, (item) => item.type === 'secret'),
+  );
 }

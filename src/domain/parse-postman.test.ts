@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parsePostman } from './parse-postman';
+import { isPostmanEnvironment, parsePostman, parsePostmanEnvironment } from './parse-postman';
 
 const SCHEMA = 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json';
 const col = (item: unknown[], extra: Record<string, unknown> = {}) => ({ info: { name: 'Demo', schema: SCHEMA }, item, ...extra });
@@ -110,5 +110,50 @@ describe('parsePostman', () => {
   it('upper-cases the method and defaults to GET', () => {
     const { collection } = parsePostman(col([req('a', { method: 'post', url: 'x' }), req('b', { url: 'x' })]));
     expect(collection.requests.map((r) => r.method)).toEqual(['POST', 'GET']);
+  });
+});
+
+describe('collection variables', () => {
+  it('returns collection variables', () => {
+    const { variables } = parsePostman(col([], { variable: [{ key: 'baseUrl', value: 'https://a.com' }, { key: 'off', value: 'x', disabled: true }, { value: 'nokey' }] }));
+    expect(variables).toEqual([
+      { key: 'baseUrl', value: 'https://a.com', secret: false, enabled: true },
+      { key: 'off', value: 'x', secret: false, enabled: false },
+    ]);
+  });
+  it('returns no variables when absent', () => {
+    expect(parsePostman(col([])).variables).toEqual([]);
+  });
+});
+
+describe('postman environment files', () => {
+  const envFile = { id: 'x', name: 'Staging', values: [
+    { key: 'host', value: 'https://s.example.com', enabled: true, type: 'default' },
+    { key: 'token', value: 'abc', enabled: true, type: 'secret' },
+    { key: 'old', value: '1', enabled: false },
+    { key: '', value: 'skip' },
+  ], _postman_variable_scope: 'environment' };
+
+  it('detects environment and globals files only', () => {
+    expect(isPostmanEnvironment(envFile)).toBe(true);
+    expect(isPostmanEnvironment({ ...envFile, _postman_variable_scope: 'globals' })).toBe(true);
+    expect(isPostmanEnvironment(col([]))).toBe(false);
+    expect(isPostmanEnvironment(null)).toBe(false);
+    expect(isPostmanEnvironment({ values: [] })).toBe(false);
+  });
+
+  it('maps values, secret type and enabled flag', () => {
+    const environment = parsePostmanEnvironment(envFile);
+    expect(environment.name).toBe('Staging');
+    expect(environment.variables).toEqual([
+      { key: 'host', value: 'https://s.example.com', secret: false, enabled: true },
+      { key: 'token', value: 'abc', secret: true, enabled: true },
+      { key: 'old', value: '1', secret: false, enabled: false },
+    ]);
+  });
+
+  it('rejects other input and defaults the name', () => {
+    expect(() => parsePostmanEnvironment({})).toThrow(/Not a Postman environment/);
+    expect(parsePostmanEnvironment({ _postman_variable_scope: 'globals', values: [] }).name).toBe('Imported environment');
   });
 });
